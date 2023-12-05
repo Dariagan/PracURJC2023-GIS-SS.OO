@@ -1,0 +1,1 @@
+echo eeee | tr e a | tr a z | tr z f | tr f l | tr l k

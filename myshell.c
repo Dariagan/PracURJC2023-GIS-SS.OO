@@ -10,23 +10,24 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <time.h>
+#include <math.h>
 
-void close_non_adyacent_pipes(int ** pipes, const int my_i, const int N_COMMANDS)
+void close_entire_pipe(const int pipe[2])
+{close(pipe[0]); close(pipe[1]);}
+
+void close_non_adjacent_pipes(int ** pipes, const int my_i, const int N_PIPES)
 {
     int j;
-    const int N_PIPES = N_COMMANDS - 1;
-    for(j = my_i + 1; j < N_PIPES; j++)
-    {
-        close_entire_pipe(pipes[j]);
-    }
     for(j = my_i - 2; j >= 0; j--)
     {
         close_entire_pipe(pipes[j]);
     }
+    for(j = my_i + 1; j < N_PIPES; j++)
+    {
+        close_entire_pipe(pipes[j]);
+    }
+    
 }
-
-void close_entire_pipe(const int pipe[2])
-{close(pipe[0]); close(pipe[1]);}
 
 #define BUFFER_SIZE 2048
 
@@ -39,14 +40,17 @@ int execute_line(tline * line)
     char const *native_commands[] = {};
     pid_t pid;
     const unsigned int N_COMMANDS = line->ncommands;
+    const unsigned int N_PIPES = N_COMMANDS - 1;
+    bool native_command_encountered = false;
+
     int i, j;
 
     //writing end: 1, reading end: 0
     int **pipes;
-    //NO OLVIDARSE DE FREEAR DESP
-    pipes = (int **)malloc((N_COMMANDS-1)*sizeof(int**));
 
-    for(i = 0; i < N_COMMANDS - 1; i++)
+    pipes = (int **)malloc((N_PIPES)*sizeof(int**));
+
+    for(i = 0; i < N_PIPES; i++)
     {
         pipes[i] = (int *)malloc(2*sizeof(int*));
         pipe(pipes[i]);
@@ -67,9 +71,9 @@ int execute_line(tline * line)
                 dup2(pipes[i][WRITING_END], STDOUT_FILENO);
                 close(pipes[i][WRITING_END]);
                 
-                close_non_adyacent_pipes(pipes, i, N_COMMANDS);
+                close_non_adjacent_pipes(pipes, i, N_PIPES);
             }
-            else if(i < N_COMMANDS - 1)
+            else if(i < N_PIPES)
             {
                 close(pipes[i - 1][WRITING_END]);
                 dup2(pipes[i - 1][READING_END], STDIN_FILENO);
@@ -79,7 +83,7 @@ int execute_line(tline * line)
                 dup2(pipes[i][WRITING_END], STDOUT_FILENO);
                 close(pipes[i][WRITING_END]);
 
-                close_non_adyacent_pipes(pipes, i, N_COMMANDS);
+                close_non_adjacent_pipes(pipes, i, N_PIPES);
             }
             else
             {
@@ -87,7 +91,7 @@ int execute_line(tline * line)
                 dup2(pipes[i - 1][READING_END], STDIN_FILENO);
                 close(pipes[i - 1][READING_END]);
 
-                close_non_adyacent_pipes(pipes, i, N_COMMANDS);
+                close_non_adjacent_pipes(pipes, i, N_PIPES);
             }
             
             fprintf(stderr, "i am %d, executing\n", i);
@@ -98,7 +102,7 @@ int execute_line(tline * line)
          
         }
     }
-    for(i = 0; i < N_COMMANDS - 1; i++)
+    for(i = 0; i < N_PIPES; i++)
     {
         close_entire_pipe(pipes[i]);
     }
@@ -106,9 +110,13 @@ int execute_line(tline * line)
     for(i = 0; i < N_COMMANDS; i++)
     {
         wait(NULL);
+        if (i < N_PIPES)
+            free(pipes[i]);
+
         printf("%d died\n", i);
         fflush(stdout);
     }
+    free(pipes);
         
     return 0;
 }
