@@ -2,8 +2,8 @@
 typedef struct
 {
 	char * filename;
-	int argc;
-	char ** argv;
+	int argc; //nº args del comando
+	char ** argv; //array de args
 } tcommand;
 
 typedef struct
