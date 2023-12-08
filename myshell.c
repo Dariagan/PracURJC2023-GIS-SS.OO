@@ -31,7 +31,6 @@ typedef struct
     tline line;
     tjobstate state;
     pid_t* children;
-    unsigned int n_commands;
     unsigned int currently_waited_child_i;
     pthread_t thread_id;//para q cuando se llame la signal, el thread q corresponda haga lo q tenga q hacer
 } Job;
@@ -98,49 +97,48 @@ void change_job_currently_waited_child_i(const unsigned int job_uid, const unsig
     }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
-
-
-void* add_and_process_bg_job(void* used_pipes, void* children_pids, void* vline)
+typedef struct {
+    int** used_pipes_arr;
+    pid_t* children_pids_arr; 
+    tline line;
+} t_args_struct;
+void* add_and_process_bg_job(void* vargs)
 {
+    t_args_struct args = *(t_args_struct*)vargs;
+    free(vargs);
     unsigned int command_i;
-    tline line = *(tline*)vline;
-    Job current_job;
-    unsigned int current_job_i;
-    current_job.state = RUNNING;
-    current_job.children = (pid_t*)children_pids;
-    current_job.line = line;
-    current_job.thread_id = pthread_self();
-    current_job.currently_waited_child_i = 0;
+    Job new_job;
+    new_job.state = RUNNING;
+    new_job.children = args.children_pids_arr;
+    new_job.line = args.line;
+    new_job.thread_id = pthread_self();
+    new_job.currently_waited_child_i = 0;
 
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
-    current_job.job_unique_id = next_job_uid_to_give ++;
-    current_job_i = bg_jobs_size ++;
+    new_job.job_unique_id = next_job_uid_to_give ++;
+    bg_jobs_size ++;
     if(bg_jobs_size == 1)
-    {
         bg_jobs = (Job*)malloc(sizeof(Job));
-    }
     else
-    {
         bg_jobs = (Job*)realloc(bg_jobs, bg_jobs_size*sizeof(Job));
-    }
-    bg_jobs[current_job_i] = current_job;
+
+    bg_jobs[bg_jobs_size - 1] = new_job;
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 
-    for(command_i = 0; command_i < current_job.line.ncommands; command_i++)
+    for(command_i = 0; command_i < new_job.line.ncommands; command_i++)
     {
-        wait_pid(current_job.children[command_i],NULL, NULL);
-        if (command_i < current_job.line.ncommands - 1)
-            free(((int**)used_pipes)[command_i]);
+        waitpid(new_job.children[command_i],NULL, NULL);
+        if (command_i < new_job.line.ncommands - 1)
+            free((args.used_pipes_arr)[command_i]);
 
-        change_job_currently_waited_child_i(current_job.job_unique_id, command_i);
+        change_job_currently_waited_child_i(new_job.job_unique_id, command_i);
         
         printf("%d died in some thread\n", command_i);
         fflush(stdout);
     }
-    free((int**)used_pipes);
-    //MAL, HAY Q BUSCARLO POR SU UNIQUE ID:
-    change_job_state(current_job.job_unique_id, DONE);
+    free(args.used_pipes_arr);
+    change_job_state(new_job.job_unique_id, DONE);
 
 }
 
@@ -233,11 +231,6 @@ int execute_umask(tcommand* command_data)
     return EXIT_SUCCESS;
 }
 
-struct t_args_struct {
-    int* used_pipes_arr;
-    pid_t* children_pids_arr; 
-    tline line;
-};
 
 
 int execute_built_in_command(tcommand* command_data)
@@ -410,7 +403,7 @@ int execute_line(tline * line)
     {
         for(i = 0; i < N_COMMANDS; i++)
         {
-            wait_pid(all_pids[i],NULL, NULL);
+            waitpid(all_pids[i],NULL, NULL);
             if (i < N_PIPES)
                 free(pipes[i]);
 
@@ -422,8 +415,11 @@ int execute_line(tline * line)
     else
     {
         pthread_t temp;
-        struct t_args_struct *args = malloc(sizeof(struct t_args_struct));
-        pthread_create(&temp, NULL, add_and_process_bg_job, (void*)pipes, all_pids, line);
+        t_args_struct *args = malloc(sizeof(t_args_struct));
+        args->children_pids_arr = all_pids;
+        args->line = *line;
+        args->used_pipes_arr = pipes;
+        pthread_create(&temp, NULL, add_and_process_bg_job, (void*)args);
     }
 
     return 0;
