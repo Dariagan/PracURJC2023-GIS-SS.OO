@@ -27,16 +27,95 @@ typedef enum{
 
 typedef struct 
 {
-    unsigned int job_id;
+    unsigned int job_unique_id;
     State state;
     pid_t* children;
+    unsigned int n_commands;
     unsigned int currently_waited_child_i;
 } Job;
 
-static Job* bg_jobs;
-static int bg_jobs_count = 0;
+static pthread_mutex_t altering_bg_jobs;
 
-static pthread_mutex_t modifiying_bg_jobs;
+//NO MODIFICAR DIRECTAMENTE
+static Job* bg_jobs;
+//NO MODIFICAR DIRECTAMENTE
+static unsigned int bg_jobs_size = 0;
+
+static unsigned int next_job_id_to_give = 0;
+
+void remove_completed_job(const unsigned int job_to_remove_uid)
+{
+    int previous_i; int added_jobs_count = 0;
+    pthread_mutex_lock(&altering_bg_jobs);
+    Job* previous_bg_jobs = bg_jobs;
+    
+    bg_jobs = (Job*)malloc((--bg_jobs_size)*sizeof(Job));
+
+    for(previous_i = 0; previous_i < bg_jobs_size + 1; previous_i++)
+    {   
+        if(previous_bg_jobs[previous_i].job_unique_id != job_to_remove_uid)
+        {
+            bg_jobs[added_jobs_count++] = previous_bg_jobs[previous_i];
+        }
+    }
+    free(previous_bg_jobs);
+    pthread_mutex_unlock(&altering_bg_jobs);
+}
+
+void change_job_state(const unsigned int searched_id, const State new_state)
+{
+    int i;
+    pthread_mutex_lock(&altering_bg_jobs);
+    for(i = 0; i < bg_jobs_size; i++)
+    {   
+        if(bg_jobs[i].job_unique_id == searched_id)
+        {
+            bg_jobs[i].state = new_state;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&altering_bg_jobs);
+}
+
+
+void* add_and_process_bg_job(void* used_pipes, void* children_pids, void* N_COMMANDS)
+{
+    unsigned int command_i;
+    Job current_job;
+    unsigned int current_job_i;
+    current_job.state = RUNNING;
+    current_job.children = (pid_t*)children_pids;
+    current_job.currently_waited_child_i = 0;
+
+    pthread_mutex_lock(&altering_bg_jobs);
+
+    current_job.job_unique_id = next_job_id_to_give ++;
+    current_job_i = bg_jobs_size ++;
+    if(bg_jobs_size == 1)
+    {
+        bg_jobs = (Job*)malloc(sizeof(Job));
+    }
+    else
+    {
+        bg_jobs = (Job*)realloc(bg_jobs, bg_jobs_size*sizeof(Job));
+    }
+    bg_jobs[current_job_i] = current_job;
+    pthread_mutex_unlock(&altering_bg_jobs);
+
+    for(command_i = 0; command_i < (unsigned int)N_COMMANDS; command_i++)
+    {
+        wait_pid(current_job.children[command_i],NULL, NULL);
+        if (command_i < N_COMMANDS - 1)
+            free(((int**)used_pipes)[command_i]);
+        
+        printf("%d died in some thread\n", command_i);
+        fflush(stdout);
+    }
+    free((int**)used_pipes);
+    //MAL, HAY Q BUSCARLO POR SU UNIQUE ID:
+    change_job_state(current_job.job_unique_id, DONE);
+
+}
 
 void close_entire_pipe(const int pipe[2])
 {close(pipe[0]); close(pipe[1]);}
@@ -113,11 +192,11 @@ int execute_exit(tcommand* command_data)
 
 int execute_umask(tcommand* command_data)
 {
+    mode_t new_mask;
     if (command_data->argc != 2) {
         fprintf(stderr, "Usage: %s <octal-mask>\n", UMASK);
         return EXIT_FAILURE;
     }
-    mode_t new_mask;
     if (sscanf(command_data->argv[1], "%o", &new_mask) != 1) {
         fprintf(stderr, "Failure: Invalid octal mask format.\n");
         return EXIT_FAILURE;
@@ -293,17 +372,24 @@ int execute_line(tline * line)
         close_entire_pipe(pipes[i]);
     }
     
-    for(i = 0; i < N_COMMANDS; i++)
+    if( ! line->background)
     {
-        wait(NULL);
-        if (i < N_PIPES)
-            free(pipes[i]);
+        for(i = 0; i < N_COMMANDS; i++)
+        {
+            wait_pid(all_pids[i],NULL, NULL);
+            if (i < N_PIPES)
+                free(pipes[i]);
 
-        printf("%d died\n", i);
-        fflush(stdout);
+            printf("%d died\n", i);
+            fflush(stdout);
+        }
+        free(pipes);
     }
-    free(pipes);
+    else
+    {
         
+    }
+
     return 0;
 }
 
@@ -312,6 +398,8 @@ int main(int argc, char const *argv[])
 {
     char buf[2048]; char cwd[2048];
     tline * line;
+    pthread_mutex_init(&altering_bg_jobs, NULL);
+    srand(time(NULL));
 
     if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");return EXIT_FAILURE;}
     
