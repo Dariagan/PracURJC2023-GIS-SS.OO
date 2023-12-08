@@ -12,11 +12,31 @@
 #include <math.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <pthread.h>
 #define true 1
 #define false 0
 #define BUFFER_SIZE 2048
 #define READING_END 0
 #define WRITING_END 1
+
+typedef enum{
+    RUNNING,
+    SUSPENDED,
+    DONE //AL MOSTRAR ESTE ESTADO POR PRIMERA VEZ, EL JOB DESPARECE
+} State;
+
+typedef struct 
+{
+    unsigned int job_id;
+    State state;
+    pid_t* children;
+    unsigned int currently_waited_child_i;
+} Job;
+
+static Job* bg_jobs;
+static int bg_jobs_count = 0;
+
+static pthread_mutex_t modifiying_bg_jobs;
 
 void close_entire_pipe(const int pipe[2])
 {close(pipe[0]); close(pipe[1]);}
@@ -87,7 +107,7 @@ int execute_fg(tcommand* command_data)
 }
 
 int execute_exit(tcommand* command_data)
-{//hay q parar los comandos de background
+{//hay q parar los jobs q estén en el background
     
 }
 
@@ -136,7 +156,8 @@ int execute_built_in_command(tcommand* command_data)
 
 int execute_line(tline * line)
 {
-    pid_t pid;
+    pid_t current_pid;
+    pid_t* all_pids;
     FILE *file;
     const unsigned int N_COMMANDS = line->ncommands;
     const unsigned int N_PIPES = N_COMMANDS - 1;
@@ -146,6 +167,8 @@ int execute_line(tline * line)
     bool output_stderr_to_file = line->redirect_error != NULL;
     int i, j;
     int **pipes;
+
+    all_pids = (pid_t*)malloc(N_COMMANDS*sizeof(pid_t));
 
     for(i = 0; i < N_COMMANDS && !builtin_command_present; i++)
     {
@@ -182,9 +205,9 @@ int execute_line(tline * line)
     
     for(i = 0; i < N_COMMANDS; i++)
     {
-        pid = fork();
+        current_pid = fork();
 
-        if(pid == 0)//hijo
+        if(current_pid == 0)//hijo
         {
             fprintf(stderr, "i am %d entering\n", i);
             fflush(stderr);
@@ -221,7 +244,7 @@ int execute_line(tline * line)
                 }
             }
             if (access(line->commands[i].filename, F_OK) != 0) {
-               fprintf(stderr, "Failure: Command \"%s\" not found\n", line->commands[i].argv[1]);
+               fprintf(stderr, "Failure: Command \"%s\" not found\n", line->commands[i].argv[0]);
                fflush(stderr);
                exit(EXIT_FAILURE);
             }
@@ -258,11 +281,12 @@ int execute_line(tline * line)
             perror("execvp");
             exit(EXIT_FAILURE);
         }
-        else if (pid == -1)
+        else if (current_pid == -1)
         {
             fprintf(stderr, "Forking for child command %d failed\n", i+1);
             return EXIT_FAILURE;
         }
+        else {all_pids[i] = current_pid;}
     }
     for(i = 0; i < N_PIPES; i++)
     {
@@ -283,8 +307,7 @@ int execute_line(tline * line)
     return 0;
 }
 
-//TODO: LA SIGNAL DE CTRL+C (EN VEZ DE CERRAR LA SHELL,
-//CANCELA EL COMANDO EJECUTANDOSE ACTUALMENTE EN EL FOREGROUND)
+//TODO LA SIGNAL DE CTRL+C (EN VEZ DE CERRAR LA SHELL,CANCELA EL COMANDO EJECUTANDOSE ACTUALMENTE EN EL FOREGROUND)
 int main(int argc, char const *argv[])
 {
     char buf[2048]; char cwd[2048];
