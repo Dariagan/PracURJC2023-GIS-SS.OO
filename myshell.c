@@ -31,7 +31,7 @@ typedef struct
     unsigned int job_unique_id;
     tline line;
     JobState state;
-    pid_t* children;
+    pid_t* children_arr;
     unsigned int currently_waited_child_i;
     pthread_t handler_thread_id;//para q cuando se llame la signal, el thread q corresponda haga lo q tenga q hacer
 } Job;
@@ -109,7 +109,7 @@ void* add_and_process_bg_job(void* vargs)
     unsigned int command_i;
     Job new_job;
     new_job.state = RUNNING;
-    new_job.children = args.children_pids_arr;
+    new_job.children_arr = args.children_pids_arr;
     new_job.line = args.line;
     new_job.handler_thread_id = pthread_self();
     new_job.currently_waited_child_i = 0;
@@ -128,13 +128,13 @@ void* add_and_process_bg_job(void* vargs)
 
     for(command_i = 0; command_i < new_job.line.ncommands; command_i++)
     {
-        waitpid(new_job.children[command_i], NULL, 0);
+        waitpid(new_job.children_arr[command_i], NULL, 0);
         if (command_i < new_job.line.ncommands - 1)
             free((args.used_pipes_arr)[command_i]);
 
         change_job_currently_waited_child_i(new_job.job_unique_id, command_i);
         
-        printf("\njob w/ uid %d died in some thread\n", new_job.job_unique_id);
+        printf("\nchild i=%d of job w/ uid %d died\n", command_i, new_job.job_unique_id);
         printf("msh> ");
         fflush(stdout);
     }
@@ -203,21 +203,26 @@ int execute_cd(tcommand* command_data)
 
 int execute_jobs(tcommand* command_data)
 {
-    int i;
+    int job_i, command_i;
     if (command_data->argc != 1) {
         fprintf(stderr, "Usage: %s \n", JOBS);
         return EXIT_FAILURE;
     }
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
-    for(i = 0; i < bg_jobs_arr_size; i++)
+    for(job_i = 0; job_i < bg_jobs_arr_size; job_i++)
     {
-        //TODO MOSTRAR EL ESTADO DEL JOB
-        printf("[%d][UID:%u] job  \n", i, bg_jobs[i].job_unique_id);
-
-        if(bg_jobs[i].state == DONE)
+        //TODO MOSTRAR EL ESTADO DEL JOB, Y LA LÍNEA EJECUTADA
+        Job* job = &(bg_jobs[job_i]);
+        printf("[%d][UID:%u] job ", job_i, job->job_unique_id);
+        for(command_i = 0; command_i < job->line.ncommands - 1; command_i++)
         {
-            remove_completed_job(bg_jobs[i].job_unique_id);
-            i--;
+            printf("%s ") //ver varargs
+        }
+        printf(" &\n");
+        if(job->state == DONE)
+        {
+            remove_completed_job(job->job_unique_id);
+            job_i--;
         }
     }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
@@ -249,7 +254,6 @@ int execute_umask(tcommand* command_data)
 
     return EXIT_SUCCESS;
 }
-
 
 
 int execute_built_in_command(tcommand* command_data)
@@ -443,6 +447,7 @@ int execute_line(tline * line)
 
     return 0;
 }
+
 
 //TODO LA SIGNAL DE CTRL+C (EN VEZ DE CERRAR LA SHELL,CANCELA EL COMANDO EJECUTANDOSE ACTUALMENTE EN EL FOREGROUND)
 int main(int argc, char const *argv[])
