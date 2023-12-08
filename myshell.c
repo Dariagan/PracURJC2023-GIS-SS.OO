@@ -23,73 +23,98 @@ typedef enum{
     RUNNING,
     SUSPENDED,
     DONE //AL MOSTRAR ESTE ESTADO POR PRIMERA VEZ, EL JOB DESPARECE
-} State;
+} tjobstate;
 
 typedef struct 
 {
     unsigned int job_unique_id;
-    State state;
+    tline line;
+    tjobstate state;
     pid_t* children;
     unsigned int n_commands;
     unsigned int currently_waited_child_i;
+    pthread_t thread_id;//para q cuando se llame la signal, el thread q corresponda haga lo q tenga q hacer
 } Job;
 
-static pthread_mutex_t altering_bg_jobs;
+static pthread_mutex_t reading_or_modifying_bg_jobs_mtx;
 
-//NO MODIFICAR DIRECTAMENTE
+//NO MODIFICAR SIN MUTEX
 static Job* bg_jobs;
-//NO MODIFICAR DIRECTAMENTE
+//NO MODIFICAR SIN MUTEX
 static unsigned int bg_jobs_size = 0;
-
-static unsigned int next_job_id_to_give = 0;
+//NO MODIFICAR SIN MUTEX
+static unsigned int next_job_uid_to_give = 0;
 
 void remove_completed_job(const unsigned int job_to_remove_uid)
 {
-    int previous_i; int added_jobs_count = 0;
-    pthread_mutex_lock(&altering_bg_jobs);
-    Job* previous_bg_jobs = bg_jobs;
+    int previous_i; int added_jobs_count = 0; 
+    Job* previous_bg_jobs;
+    if(bg_jobs_size == 0) return;
+    pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
+    previous_bg_jobs = bg_jobs;
     
-    bg_jobs = (Job*)malloc((--bg_jobs_size)*sizeof(Job));
-
-    for(previous_i = 0; previous_i < bg_jobs_size + 1; previous_i++)
-    {   
-        if(previous_bg_jobs[previous_i].job_unique_id != job_to_remove_uid)
-        {
-            bg_jobs[added_jobs_count++] = previous_bg_jobs[previous_i];
+    bg_jobs_size--;
+    if(bg_jobs_size >= 1)
+    {
+        bg_jobs = (Job*)malloc((bg_jobs_size)*sizeof(Job));
+        for(previous_i = 0; previous_i < bg_jobs_size + 1; previous_i++)
+        {   
+            if(previous_bg_jobs[previous_i].job_unique_id != job_to_remove_uid)
+            {
+                bg_jobs[added_jobs_count++] = previous_bg_jobs[previous_i];
+            }
         }
     }
     free(previous_bg_jobs);
-    pthread_mutex_unlock(&altering_bg_jobs);
+    pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 
-void change_job_state(const unsigned int searched_id, const State new_state)
+void change_job_state(const unsigned int job_uid, const tjobstate new_state)
 {
     int i;
-    pthread_mutex_lock(&altering_bg_jobs);
+    pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
     for(i = 0; i < bg_jobs_size; i++)
     {   
-        if(bg_jobs[i].job_unique_id == searched_id)
+        if(bg_jobs[i].job_unique_id == job_uid)
         {
             bg_jobs[i].state = new_state;
             break;
         }
     }
-    pthread_mutex_unlock(&altering_bg_jobs);
+    pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
+}
+
+void change_job_currently_waited_child_i(const unsigned int job_uid, const unsigned int new_current_i)
+{
+    int i;
+    pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
+    for(i = 0; i < bg_jobs_size; i++)
+    {   
+        if(bg_jobs[i].job_unique_id == job_uid)
+        {
+            bg_jobs[i].currently_waited_child_i = new_current_i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 
 
-void* add_and_process_bg_job(void* used_pipes, void* children_pids, void* N_COMMANDS)
+void* add_and_process_bg_job(void* used_pipes, void* children_pids, void* vline)
 {
     unsigned int command_i;
+    tline line = *(tline*)vline;
     Job current_job;
     unsigned int current_job_i;
     current_job.state = RUNNING;
     current_job.children = (pid_t*)children_pids;
+    current_job.line = line;
+    current_job.thread_id = pthread_self();
     current_job.currently_waited_child_i = 0;
 
-    pthread_mutex_lock(&altering_bg_jobs);
+    pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
-    current_job.job_unique_id = next_job_id_to_give ++;
+    current_job.job_unique_id = next_job_uid_to_give ++;
     current_job_i = bg_jobs_size ++;
     if(bg_jobs_size == 1)
     {
@@ -100,13 +125,15 @@ void* add_and_process_bg_job(void* used_pipes, void* children_pids, void* N_COMM
         bg_jobs = (Job*)realloc(bg_jobs, bg_jobs_size*sizeof(Job));
     }
     bg_jobs[current_job_i] = current_job;
-    pthread_mutex_unlock(&altering_bg_jobs);
+    pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 
-    for(command_i = 0; command_i < (unsigned int)N_COMMANDS; command_i++)
+    for(command_i = 0; command_i < current_job.line.ncommands; command_i++)
     {
         wait_pid(current_job.children[command_i],NULL, NULL);
-        if (command_i < N_COMMANDS - 1)
+        if (command_i < current_job.line.ncommands - 1)
             free(((int**)used_pipes)[command_i]);
+
+        change_job_currently_waited_child_i(current_job.job_unique_id, command_i);
         
         printf("%d died in some thread\n", command_i);
         fflush(stdout);
@@ -205,6 +232,13 @@ int execute_umask(tcommand* command_data)
 
     return EXIT_SUCCESS;
 }
+
+struct t_args_struct {
+    int* used_pipes_arr;
+    pid_t* children_pids_arr; 
+    tline line;
+};
+
 
 int execute_built_in_command(tcommand* command_data)
 {
@@ -387,7 +421,9 @@ int execute_line(tline * line)
     }
     else
     {
-        
+        pthread_t temp;
+        struct t_args_struct *args = malloc(sizeof(struct t_args_struct));
+        pthread_create(&temp, NULL, add_and_process_bg_job, (void*)pipes, all_pids, line);
     }
 
     return 0;
@@ -398,7 +434,7 @@ int main(int argc, char const *argv[])
 {
     char buf[2048]; char cwd[2048];
     tline * line;
-    pthread_mutex_init(&altering_bg_jobs, NULL);
+    pthread_mutex_init(&reading_or_modifying_bg_jobs_mtx, NULL);
     srand(time(NULL));
 
     if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");return EXIT_FAILURE;}
