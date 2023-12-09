@@ -53,6 +53,8 @@ static unsigned int bg_jobs_arr_size = 0;
 //NO MODIFICAR SIN MUTEX ⚠️
 static unsigned int next_job_uid_to_assign = 1;
 
+static pid_t main_thread;
+
 //SOLO LLAMAR DESDE DENTRO DE UN MUTEX ⚠️
 void remove_completed_job(const unsigned int job_to_remove_uid)
 {
@@ -174,15 +176,15 @@ static const char FG[] = "fg";
 static const char EXIT[] = "exit";
 static const char UMASK[] = "umask";
 
-static const char * const BUILTIN_COMMANDS[] = {CD, JOBS, FG, EXIT, UMASK};
-static const __u_char N_BUILTIN_COMMANDS = sizeof(BUILTIN_COMMANDS)/sizeof(char*);
+static const char * const BUILTIn_commands[] = {CD, JOBS, FG, EXIT, UMASK};
+static const __u_char N_BUILTIn_commands = sizeof(BUILTIn_commands)/sizeof(char*);
 
 bool is_builtin_command(tcommand* command_data)
 {
     const char* const command_name = command_data->argv[0];
     int i;
-    for(i = 0; i < N_BUILTIN_COMMANDS; i++)
-        if(strcmp(BUILTIN_COMMANDS[i], command_name) == 0)
+    for(i = 0; i < N_BUILTIn_commands; i++)
+        if(strcmp(BUILTIn_commands[i], command_name) == 0)
             return true;
     return false;
 }
@@ -303,7 +305,6 @@ int execute_umask(tcommand* command_data)
     return EXIT_SUCCESS;
 }
 
-
 int execute_built_in_command(tcommand* command_data)
 {
     const char* const command_name = command_data->argv[0];
@@ -331,33 +332,58 @@ int execute_built_in_command(tcommand* command_data)
     exit(EXIT_FAILURE);
 }
 
-static pid_t* main_thread_forks_pids;
+static pid_t* main_thread_forks_pids_arr;
+static unsigned int fg_n_commands = 0;
+static bool sent_to_background = false;
+static unsigned int waited_i = 0;
+static int** used_pipes_arr;
 
+void stop_foreground_execution(int signal)
+{
+    unsigned int i;
+    if(pthread_self() == main_thread && signal == SIGINT 
+        && ! sent_to_background && fg_n_commands)
+    {
+        for(i = waited_i; i < fg_n_commands; i++)
+        {
+            kill(main_thread_forks_pids_arr[i], SIGINT);
+        }
+        sleep(1);
+        for(i = waited_i; i < fg_n_commands; i++)
+        {//creo q hay q waitearlos async
+            free(used_pipes_arr[i]);
+            kill(main_thread_forks_pids_arr[i], 9);
+        }
+        free(used_pipes_arr);
+        await_input_loop();
+    }
+    else return;
+}
 
 int execute_line(tline * line)
 {
     
-    const unsigned int N_COMMANDS = line->ncommands;
-    main_thread_forks_pids = (pid_t*)malloc(N_COMMANDS*sizeof(pid_t));
+    fg_n_commands = line->ncommands;
+    sent_to_background = line->background;
+    main_thread_forks_pids_arr = (pid_t*)malloc(fg_n_commands*sizeof(pid_t));
     pid_t current_pid;
     FILE *file;
-    const unsigned int N_PIPES = N_COMMANDS - 1;
+    const unsigned int N_PIPES = fg_n_commands - 1;
     bool builtin_command_present = false;
     bool input_from_file = line->redirect_input != NULL;
     bool output_to_file = line->redirect_output != NULL;
     bool output_stderr_to_file = line->redirect_error != NULL;
     int i, j;
-    int **pipes;
 
-    if(!N_COMMANDS) return 0;
+    if(!fg_n_commands) return 0;
 
-    for(i = 0; i < N_COMMANDS && !builtin_command_present; i++)
+    for(i = 0; i < fg_n_commands && !builtin_command_present; i++)
     {
         builtin_command_present = is_builtin_command(&(line->commands[i]));
     }
     if(builtin_command_present) 
     {
-        if(N_COMMANDS > 1)
+        if(fg_n_commands > 1)
         {
             fprintf(stderr, "Error: built-in commands cannot be piped\n");
             return EXIT_FAILURE;
@@ -379,17 +405,16 @@ int execute_line(tline * line)
         }
         return execute_built_in_command(&(line->commands[0]));
     }
-    //TODO mandar a background
 
-    pipes = (int **)malloc((N_PIPES)*sizeof(int*));
+    used_pipes_arr = (int **)malloc((N_PIPES)*sizeof(int*));
 
     for(i = 0; i < N_PIPES; i++)
     {
-        pipes[i] = (int*)malloc(2*sizeof(int));
-        pipe(pipes[i]);
+        used_pipes_arr[i] = (int*)malloc(2*sizeof(int));
+        pipe(used_pipes_arr[i]);
     }
     
-    for(i = 0; i < N_COMMANDS; i++)
+    for(i = 0; i < fg_n_commands; i++)
     {
         current_pid = fork();
 
@@ -402,31 +427,31 @@ int execute_line(tline * line)
             {
                 if(i == 0)//primer comando
                 {
-                    close(pipes[i][READING_END]);
-                    dup2(pipes[i][WRITING_END], STDOUT_FILENO);
-                    close(pipes[i][WRITING_END]);
+                    close(used_pipes_arr[i][READING_END]);
+                    dup2(used_pipes_arr[i][WRITING_END], STDOUT_FILENO);
+                    close(used_pipes_arr[i][WRITING_END]);
                     
-                    close_non_adjacent_pipes(pipes, i, N_PIPES);
+                    close_non_adjacent_pipes(used_pipes_arr, i, N_PIPES);
                 }
-                else if(i < N_COMMANDS - 1)//comando intermedio
+                else if(i < fg_n_commands - 1)//comando intermedio
                 {
-                    close(pipes[i - 1][WRITING_END]);
-                    dup2(pipes[i - 1][READING_END], STDIN_FILENO);
-                    close(pipes[i - 1][READING_END]);
+                    close(used_pipes_arr[i - 1][WRITING_END]);
+                    dup2(used_pipes_arr[i - 1][READING_END], STDIN_FILENO);
+                    close(used_pipes_arr[i - 1][READING_END]);
 
-                    close(pipes[i][READING_END]);
-                    dup2(pipes[i][WRITING_END], STDOUT_FILENO);
-                    close(pipes[i][WRITING_END]);
+                    close(used_pipes_arr[i][READING_END]);
+                    dup2(used_pipes_arr[i][WRITING_END], STDOUT_FILENO);
+                    close(used_pipes_arr[i][WRITING_END]);
 
-                    close_non_adjacent_pipes(pipes, i, N_PIPES);
+                    close_non_adjacent_pipes(used_pipes_arr, i, N_PIPES);
                 }
                 else//último comando
                 {
-                    close(pipes[i - 1][WRITING_END]);
-                    dup2(pipes[i - 1][READING_END], STDIN_FILENO);
-                    close(pipes[i - 1][READING_END]);
+                    close(used_pipes_arr[i - 1][WRITING_END]);
+                    dup2(used_pipes_arr[i - 1][READING_END], STDIN_FILENO);
+                    close(used_pipes_arr[i - 1][READING_END]);
 
-                    close_non_adjacent_pipes(pipes, i, N_PIPES);
+                    close_non_adjacent_pipes(used_pipes_arr, i, N_PIPES);
                 }
             }
             if (access(line->commands[i].filename, F_OK) != 0) {
@@ -442,7 +467,7 @@ int execute_line(tline * line)
                     exit(EXIT_FAILURE);
                 }
             }
-            if(i == N_COMMANDS - 1)//si es el último comando
+            if(i == fg_n_commands - 1)//si es el último comando
             {
                 if(output_to_file)
                 {
@@ -472,55 +497,57 @@ int execute_line(tline * line)
             fprintf(stderr, "Forking for child command %d failed\n", i+1);
             return EXIT_FAILURE;
         }
-        else {main_thread_forks_pids[i] = current_pid;}
+        else {main_thread_forks_pids_arr[i] = current_pid;}
     }
     for(i = 0; i < N_PIPES; i++)
     {
-        close_entire_pipe(pipes[i]);
+        close_entire_pipe(used_pipes_arr[i]);
     }
     
     if( ! line->background)
     {
-        for(i = 0; i < N_COMMANDS; i++)
+        for(waited_i = 0; waited_i < fg_n_commands; waited_i++)
         {
-            waitpid(main_thread_forks_pids[i], NULL, 0);
-            if (i < N_PIPES)
-                free(pipes[i]);
+            waitpid(main_thread_forks_pids_arr[waited_i], NULL, 0);
+            if (waited_i < N_PIPES)
+                free(used_pipes_arr[waited_i]);
 
-            printf("%d died\n", i);
+            printf("%d died\n", waited_i);
             fflush(stdout);
         }
-        free(pipes);
-        free(main_thread_forks_pids);
+        free(used_pipes_arr);
+        free(main_thread_forks_pids_arr);
     }
     else
     {
         pthread_t temp;
         t_args_struct *args = malloc(sizeof(t_args_struct));
-        args->children_pids_arr = main_thread_forks_pids;
+        args->children_pids_arr = main_thread_forks_pids_arr;
         args->line = *line;
-        args->used_pipes_arr = pipes;
+        args->used_pipes_arr = used_pipes_arr;
         pthread_create(&temp, NULL, add_and_process_bg_job, (void*)args);
     }
 
     return 0;
 }
 
-static pid_t main_thread;
 
 //TODO LA SIGNAL DE CTRL+C (EN VEZ DE CERRAR LA SHELL,CANCELA EL COMANDO EJECUTANDOSE ACTUALMENTE EN EL FOREGROUND)
 int main(int argc, char const *argv[])
 {
-    char buf[2048]; char cwd[2048];
-    main_thread = pthread_self();
-    tline * line;
-    pthread_mutex_init(&reading_or_modifying_bg_jobs_mtx, NULL);
-    srand(time(NULL));
-
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");return EXIT_FAILURE;}
     
-    printf("msh %s> ", cwd);	
+    main_thread = pthread_self();
+    pthread_mutex_init(&reading_or_modifying_bg_jobs_mtx, NULL);
+    signal(SIGINT, stop_foreground_execution);
+    await_input_loop();
+}
 
+int await_input_loop()
+{
+    char buf[2048]; char cwd[2048];
+    tline * line;
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");return EXIT_FAILURE;} 
+    printf("msh %s> ", cwd);	
     while (fgets(buf, sizeof(buf), stdin)) 
     {
         line = tokenize(buf);
@@ -528,5 +555,5 @@ int main(int argc, char const *argv[])
         if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");return EXIT_FAILURE;}
         printf("msh %s> ", cwd);
     }
-    return 0;
+    exit(EXIT_SUCCESS);
 }
