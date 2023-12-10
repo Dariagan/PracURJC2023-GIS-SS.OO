@@ -615,12 +615,15 @@ int execute_line(tline* line)
                 }
             }
             //fprintf(stdout, "i am %d, executing\n msh>", i);fflush(stdout);
+            
+            if(i > 0)//esperar q el hermano anterior esté muerto (cuando la señal devuelve 1)
+                while(kill(fg_forks_pids_arr[i-1], 0) != -1)
+                    usleep(10);
+            
+           
             execvp(line->commands[i].filename, line->commands[i].argv);
             perror("execvp");
             exit(EXIT_FAILURE);
-
-//TODO: ESPERAR QUE TERMINE EL CHILD ANTERIOR ANTES DE EJECUTARSE A SÍ
-
         }
         else if (current_pid == -1)
         {
