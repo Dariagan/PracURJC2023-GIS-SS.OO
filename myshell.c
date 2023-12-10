@@ -124,19 +124,25 @@ void deep_copy_line(tline* dest_line, tline* src_line)
             dest_current_command->argv[arg_j] = strdup(src_current_command->argv[arg_j]);
         }
     }
-    dest_line->redirect_input = strdup(src_line->redirect_input);
-    dest_line->redirect_output = strdup(src_line->redirect_output);
-    dest_line->redirect_error = strdup(src_line->redirect_error);
+    if(src_line->redirect_input)
+        dest_line->redirect_input = strdup(src_line->redirect_input);
+    if(src_line->redirect_output)
+        dest_line->redirect_output = strdup(src_line->redirect_output);
+    if(src_line->redirect_error)
+        dest_line->redirect_error = strdup(src_line->redirect_error);
 }
 void deep_free_line_from_job(Job* job)
 {
     int cmd_i, arg_j; 
     tline* line = &(job->line);
     tcommand* current_command;
-    free(line->redirect_input);
-    free(line->redirect_output);
-    free(line->redirect_error);
-    
+    if(line->redirect_input)
+        free(line->redirect_input);
+    if(line->redirect_output)
+        free(line->redirect_output);
+    if(line->redirect_error)
+        free(line->redirect_error);
+        
     for(cmd_i = 0; cmd_i < line->ncommands; cmd_i++)
     {
         current_command = line->commands + cmd_i;
@@ -161,7 +167,6 @@ static unsigned int fg_waited_i = 0;
 
 static bool fg_execution_cancelled = false;
 
-
 typedef struct {
     int** used_pipes_arr;
     pid_t* children_pids_arr; 
@@ -175,12 +180,10 @@ void* async_add_and_process_bg_job(void* uncasted_args)
     new_job.state = RUNNING;
     new_job.children_arr = args.children_pids_arr;
 
-    //TODO Hacer una función para deep copy de los contenidos apuntados por los punteros
     new_job.line = args.line;
 
     new_job.handler_thread_id = pthread_self();
     new_job.currently_waited_child_i = 0;
-
     
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
@@ -270,9 +273,10 @@ int execute_cd(tcommand* command_data)
 
 int execute_jobs(tcommand* command_data)
 {
-    int job_i, command_i, jobs_to_remove_count = 0; 
+    int job_i, cmd_i, arg_j, jobs_to_remove_count = 0; 
     unsigned int* completed_job_uids;
     Job* job;
+    tcommand* command;
     if (command_data->argc != 1) {
         fprintf(stderr, "Usage: %s \n", JOBS);
         return EXIT_FAILURE;
@@ -282,12 +286,16 @@ int execute_jobs(tcommand* command_data)
     {
         job = bg_jobs + job_i;
         printf("[%dº][UID:%u] job ", job_i, job->job_unique_id);
-        for(command_i = 0; command_i < job->line.ncommands; command_i++)
+        for(cmd_i = 0; cmd_i < job->line.ncommands; cmd_i++)
         {
-            printf("%s ", job->line.commands[command_i].filename);
-            if(command_i <  job->line.ncommands - 1)
+            command = job->line.commands + cmd_i;
+            for(arg_j = 0; arg_j < command->argc; arg_j++)
             {
-                printf(" | ");//TODO
+                printf("%s ", command->argv[arg_j]);
+            }
+            if(cmd_i <  job->line.ncommands - 1)
+            {
+                printf("| ");
             }
         }
         if(job->line.redirect_input != NULL)
@@ -610,6 +618,9 @@ int execute_line(tline* line)
             execvp(line->commands[i].filename, line->commands[i].argv);
             perror("execvp");
             exit(EXIT_FAILURE);
+
+//TODO: ESPERAR QUE TERMINE EL CHILD ANTERIOR ANTES DE EJECUTARSE A SÍ
+
         }
         else if (current_pid == -1)
         {
