@@ -32,7 +32,6 @@ case FAILED: return "Failed"; break;
 case DONE: return "Done"; break;
 default:fprintf(stderr, "INTERNAL ERROR (at stringify_job_state())\n");exit(EXIT_FAILURE);
 }}
-
 typedef struct 
 {
     unsigned int job_unique_id;
@@ -49,11 +48,11 @@ static pthread_mutex_t reading_or_modifying_bg_jobs_mtx;
 static Job* bg_jobs;
 //NO MODIFICAR SIN MUTEX ⚠️
 static unsigned int bg_jobs_arr_size = 0;
-
+void deep_free_line_from_job(Job* job);
 //SOLO LLAMAR DESDE DENTRO DEL MUTEX⚠️
 void remove_completed_job(const unsigned int job_to_remove_uid)
 {
-    int previous_i; int added_jobs_count = 0; 
+    int prev_arr_i; int added_jobs_count = 0; 
     Job* previous_bg_jobs;
     if(bg_jobs_arr_size == 0) {fprintf(stderr, "INTERNAL ERROR: job list is empty at this point\n"); exit(EXIT_FAILURE);}
 
@@ -61,11 +60,15 @@ void remove_completed_job(const unsigned int job_to_remove_uid)
     if(-- bg_jobs_arr_size > 0)
     {
         bg_jobs = (Job*)malloc((bg_jobs_arr_size)*sizeof(Job));
-        for(previous_i = 0; previous_i < bg_jobs_arr_size + 1; previous_i++)
+        for(prev_arr_i = 0; prev_arr_i < bg_jobs_arr_size + 1; prev_arr_i++)
         {   
-            if(previous_bg_jobs[previous_i].job_unique_id != job_to_remove_uid)
+            if(previous_bg_jobs[prev_arr_i].job_unique_id != job_to_remove_uid)
             {
-                bg_jobs[added_jobs_count++] = previous_bg_jobs[previous_i];
+                bg_jobs[added_jobs_count++] = previous_bg_jobs[prev_arr_i];
+            }
+            else
+            {
+                deep_free_line_from_job(previous_bg_jobs + prev_arr_i);
             }
         }
     }
@@ -102,6 +105,51 @@ void change_job_currently_waited_child_i(const unsigned int job_uid, const unsig
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 
+void deep_copy_line(tline* dest_line, tline* src_line)
+{
+    int cmd_i, arg_j; tcommand* dest_current_command, *src_current_command;
+    *dest_line = *src_line;
+    dest_line->commands = malloc(src_line->ncommands*sizeof(tcommand));
+
+    for(cmd_i = 0; cmd_i < src_line->ncommands; cmd_i++)
+    {
+        dest_current_command = dest_line->commands + cmd_i;
+        src_current_command = src_line->commands + cmd_i;
+
+        dest_current_command->filename = strdup(src_current_command->filename);
+        dest_current_command->argc = src_current_command->argc;
+        dest_current_command->argv = malloc(src_current_command->argc*sizeof(char*));
+        for(arg_j = 0; arg_j < src_current_command->argc; arg_j++)
+        {
+            dest_current_command->argv[arg_j] = strdup(src_current_command->argv[arg_j]);
+        }
+    }
+    dest_line->redirect_input = strdup(src_line->redirect_input);
+    dest_line->redirect_output = strdup(src_line->redirect_output);
+    dest_line->redirect_error = strdup(src_line->redirect_error);
+}
+void deep_free_line_from_job(Job* job)
+{
+    int cmd_i, arg_j; 
+    tline* line = &(job->line);
+    tcommand* current_command;
+    free(line->redirect_input);
+    free(line->redirect_output);
+    free(line->redirect_error);
+    
+    for(cmd_i = 0; cmd_i < line->ncommands; cmd_i++)
+    {
+        current_command = line->commands + cmd_i;
+        free(current_command->filename);
+        for(arg_j = 0; arg_j < current_command->argc; arg_j++)
+        {
+            free(current_command->argv[arg_j]);
+        }
+        free(current_command->argv);
+    }
+    free(line->commands);
+}
+
 //NO MODIFICAR SIN MUTEX ⚠️
 static unsigned int next_job_uid_to_assign = 1;
 
@@ -126,18 +174,22 @@ void* async_add_and_process_bg_job(void* uncasted_args)
     Job new_job;
     new_job.state = RUNNING;
     new_job.children_arr = args.children_pids_arr;
+
+    //TODO Hacer una función para deep copy de los contenidos apuntados por los punteros
     new_job.line = args.line;
+
     new_job.handler_thread_id = pthread_self();
     new_job.currently_waited_child_i = 0;
 
+    
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
     new_job.job_unique_id = next_job_uid_to_assign ++;
 
     if(++ bg_jobs_arr_size == 1)
-        bg_jobs = (Job*)malloc(sizeof(Job));
+        bg_jobs = malloc(sizeof(Job));
     else
-        bg_jobs = (Job*)realloc(bg_jobs, bg_jobs_arr_size*sizeof(Job));
+        bg_jobs = realloc(bg_jobs, bg_jobs_arr_size*sizeof(Job));
 
     bg_jobs[bg_jobs_arr_size - 1] = new_job;
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
@@ -157,9 +209,7 @@ void* async_add_and_process_bg_job(void* uncasted_args)
         if (command_i < new_job.line.ncommands - 1)
             free((args.used_pipes_arr)[command_i]);
         
-        fprintf(stderr, "\nchild i=%d of job w/ uid %d died\n", command_i, new_job.job_unique_id);
-        printf("msh> ");
-        fflush(stdout);
+        //fprintf(stdout, "\nchild i=%d of job w/ uid %d died\n", command_i, new_job.job_unique_id);printf("msh> ");fflush(stdout);
     }
     if( ! (pthread_self() == main_thread && fg_execution_cancelled))
         change_job_state(new_job.job_unique_id, DONE);
@@ -232,15 +282,28 @@ int execute_jobs(tcommand* command_data)
     {
         job = bg_jobs + job_i;
         printf("[%dº][UID:%u] job ", job_i, job->job_unique_id);
-        for(command_i = 0; command_i < job->line.ncommands - 1; command_i++)
+        for(command_i = 0; command_i < job->line.ncommands; command_i++)
         {
-            printf("%s ", job->line.commands[command_i].argv[0]);
-            if(command_i > 0)
+            printf("%s ", job->line.commands[command_i].filename);
+            if(command_i <  job->line.ncommands - 1)
             {
                 printf(" | ");//TODO
             }
         }
-        printf(" & STATUS: %s\n", stringify_job_state(job->state));
+        if(job->line.redirect_input != NULL)
+        {
+            printf(" < %s", job->line.redirect_input);
+        }
+        if(job->line.redirect_output != NULL)
+        {
+            printf(" > %s", job->line.redirect_output);
+        }
+        if(job->line.redirect_error != NULL)
+        {
+            printf(" >& %s", job->line.redirect_error);
+        }
+
+        printf(" STATUS: %s\n", stringify_job_state(job->state));
         if(job->state == DONE)
         {
             if(jobs_to_remove_count ++ == 0)
@@ -268,7 +331,7 @@ int execute_jobs(tcommand* command_data)
     
     return EXIT_SUCCESS;
 }
-//llamar solo desde mutex
+//llamar solo desde dentro de mutex
 Job* find_bg_job(unsigned int uid){
     unsigned int i;
     for(i = 0; i < bg_jobs_arr_size; i++)
@@ -306,27 +369,19 @@ int execute_fg(tcommand* command_data)
                 main_thread = pthread_self();
                 return EXIT_SUCCESS;
             }
-            else
-            {
-                pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
-                fprintf(stderr, "Job with UID %d is already finished\n", uid);
-                return 1;
-            }
+            else fprintf(stderr, "Job with UID=%d has already finished\n", uid);
         }
-        else
-        {
-            pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
-            fprintf(stderr, "Job with UID %d not found\n", uid);
-            return 1;
-        }
+        else fprintf(stderr, "Job with UID=%d not found\n", uid);
+        
+        pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
+        return EXIT_FAILURE;
     }
     else
     {
-        fprintf(stderr, "Specified Job-UID must be a strictly positive integer\n");
+        fprintf(stderr, "Specified Job UID must be a strictly positive integer\n");
         return EXIT_FAILURE;
     }
 }
-
 //USAR DENTRO DE MUTEX
 void broadcast_signal(int signal)
 {
@@ -472,7 +527,6 @@ int execute_line(tline* line)
         }
         return execute_built_in_command(&(line->commands[0]));
     }
-
     pipes_arr = (int **)malloc((N_PIPES)*sizeof(int*));
 
     for(i = 0; i < N_PIPES; i++)
@@ -533,7 +587,7 @@ int execute_line(tline* line)
                     exit(EXIT_FAILURE);
                 }
             }
-            if(i == fg_n_commands - 1)//si es el último comando
+            if(i == fg_n_commands - 1)//si es el último comando...
             {
                 if(output_to_file)
                 {
@@ -591,7 +645,7 @@ int execute_line(tline* line)
     {
         AddJobArgs *args = malloc(sizeof(AddJobArgs));
         args->children_pids_arr = fg_forks_pids_arr;
-        args->line = *line;
+        deep_copy_line(&args->line, line);
         args->used_pipes_arr = pipes_arr;
         pthread_create(&placeholder, NULL, async_add_and_process_bg_job, (void*)args);
     }
