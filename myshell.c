@@ -335,7 +335,7 @@ int execute_jobs(tcommand* command_data)
     }
     
     return EXIT_SUCCESS;
-}
+}//TODO: LLENAR TODO DE COMENTARIOS
 //llamar solo desde dentro de mutex
 Job* find_bg_job(unsigned int uid){
     unsigned int i;
@@ -395,9 +395,7 @@ void broadcast_signal(int signal)
     {   
         job = bg_jobs + jobs_i;
         for(j = 0; j < job->line.ncommands; j++)
-        {
             kill(job->children_arr[j], signal);
-        }
     }
 }
 
@@ -617,7 +615,6 @@ int execute_line(tline* line)
                 while(kill(fg_forks_pids_arr[i-1], 0) != -1)
                     usleep(10);
             
-           
             execvp(line->commands[i].filename, line->commands[i].argv);
             perror("execvp");
             exit(EXIT_FAILURE);
@@ -688,3 +685,4 @@ int main(int argc, char const *argv[])
     signal(SIGINT, stop_foreground_execution);
     do_await_input_loop();
 }
+//TODO: LLENAR TODO DE COMENTARIOS
