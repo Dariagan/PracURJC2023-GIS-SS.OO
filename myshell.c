@@ -66,10 +66,7 @@ void remove_completed_job(const unsigned int job_to_remove_uid)
             {
                 bg_jobs[added_jobs_count++] = previous_bg_jobs[prev_arr_i];
             }
-            else
-            {
-                deep_free_line_from_job(previous_bg_jobs + prev_arr_i);
-            }
+            else deep_free_line_from_job(previous_bg_jobs + prev_arr_i);
         }
     }
     free(previous_bg_jobs);
@@ -615,7 +612,7 @@ int execute_line(tline* line)
                 }
             }
             //fprintf(stdout, "i am %d, executing\n msh>", i);fflush(stdout);
-            
+
             if(i > 0)//esperar q el hermano anterior esté muerto (cuando la señal devuelve 1)
                 while(kill(fg_forks_pids_arr[i-1], 0) != -1)
                     usleep(10);
