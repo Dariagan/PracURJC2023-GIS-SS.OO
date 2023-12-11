@@ -43,7 +43,7 @@ static pthread_mutex_t reading_or_modifying_bg_jobs_mtx;
 static Job* bg_jobs;
 //NO MODIFICAR SIN MUTEX ⚠️
 static unsigned int bg_jobs_arr_size = 0;
-void deep_free_line_from_job(Job* job);
+void deep_free_line_embedded_strings(Job* job);
 
 //SOLO LLAMAR DESDE DENTRO DEL MUTEX⚠️
 void remove_completed_job(const unsigned int job_to_remove_uid)
@@ -55,14 +55,14 @@ void remove_completed_job(const unsigned int job_to_remove_uid)
     previous_bg_jobs = bg_jobs;
     if(-- bg_jobs_arr_size > 0)
     {
-        bg_jobs = (Job*)malloc((bg_jobs_arr_size)*sizeof(Job));
+        bg_jobs = malloc((bg_jobs_arr_size)*sizeof(Job));
         for(prev_arr_i = 0; prev_arr_i < bg_jobs_arr_size + 1; prev_arr_i++)
         {   
             if(previous_bg_jobs[prev_arr_i].job_unique_id != job_to_remove_uid)
             {
                 bg_jobs[added_jobs_count++] = previous_bg_jobs[prev_arr_i];
             }
-            else deep_free_line_from_job(previous_bg_jobs + prev_arr_i);
+            else deep_free_line_embedded_strings(previous_bg_jobs + prev_arr_i);
         }
     }
     free(previous_bg_jobs);
@@ -101,21 +101,21 @@ void change_job_currently_waited_child_i(const unsigned int job_uid, const unsig
 //Si no se hace esto, la siguiente llamada a tokenize() sobrescribiría los strings apuntados, la copia de solo punteros no sirve.
 void deep_copy_line(tline* dest_line, tline* src_line)
 {
-    int cmd_i, arg_j; tcommand* dest_current_command, *src_current_command;
+    int cmd_i, arg_j; tcommand* dest_command; tcommand* src_command;
     *dest_line = *src_line;
     dest_line->commands = malloc(src_line->ncommands*sizeof(tcommand));
 
     for(cmd_i = 0; cmd_i < src_line->ncommands; cmd_i++)
     {
-        dest_current_command = dest_line->commands + cmd_i;
-        src_current_command = src_line->commands + cmd_i;
+        dest_command = dest_line->commands + cmd_i;
+        src_command = src_line->commands + cmd_i;
 
-        dest_current_command->filename = strdup(src_current_command->filename);
-        dest_current_command->argc = src_current_command->argc;
-        dest_current_command->argv = malloc(src_current_command->argc*sizeof(char*));
-        for(arg_j = 0; arg_j < src_current_command->argc; arg_j++)
+        dest_command->filename = strdup(src_command->filename);
+        dest_command->argc = src_command->argc;
+        dest_command->argv = malloc(src_command->argc*sizeof(char*));
+        for(arg_j = 0; arg_j < src_command->argc; arg_j++)
         {
-            dest_current_command->argv[arg_j] = strdup(src_current_command->argv[arg_j]);
+            dest_command->argv[arg_j] = strdup(src_command->argv[arg_j]);
         }
     }
     if(src_line->redirect_input)
@@ -125,7 +125,7 @@ void deep_copy_line(tline* dest_line, tline* src_line)
     if(src_line->redirect_error)
         dest_line->redirect_error = strdup(src_line->redirect_error);
 }
-void deep_free_line_from_job(Job* job)
+void deep_free_line_embedded_strings(Job* job)
 {
     int cmd_i, arg_j; 
     tline* line = &(job->line);
@@ -263,7 +263,7 @@ int execute_cd(tcommand* command_data)
     }
     return EXIT_SUCCESS;
 }
-//Ejecuta el comando jobs
+//Ejecuta el comando "jobs"
 int execute_jobs(tcommand* command_data)
 {
     int job_i, cmd_i, arg_j, jobs_to_remove_count = 0; 
@@ -382,7 +382,6 @@ void broadcast_signal(int signal)
             kill(job->children_arr[j], signal);
     }
 }
-
 int execute_exit(tcommand* command_data)
 {
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
@@ -510,7 +509,7 @@ int run_line(tline* line)
             fprintf(stderr, "Error: built-in commands cannot be executed in the background\n");
             return EXIT_FAILURE;
         }
-        return execute_built_in_command(&(line->commands[0]));
+        return execute_built_in_command(line->commands + 0);
     }
     pipes_arr = (int **)malloc((N_PIPES)*sizeof(int*));
 
@@ -526,7 +525,7 @@ int run_line(tline* line)
 
         if(current_pid == 0)//hijo
         {
-            //ignorar ctrl + c
+            //ignora los ctrl + c
             signal(SIGINT, SIG_IGN);
             //fprintf(stderr, "i am %d entering\n", i);fflush(stderr);//DEBUG
 
@@ -640,7 +639,7 @@ int run_line(tline* line)
 
     return 0;
 }
-// loop de msh>
+// imprime msh> y pide input después de cada enter o comando de fg finalizado
 int do_await_input_loop()
 {
     char buf[BUFFER_SIZE]; char cwd[BUFFER_SIZE];
