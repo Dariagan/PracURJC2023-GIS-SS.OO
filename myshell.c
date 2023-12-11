@@ -623,7 +623,9 @@ int run_line(tline* line)
 
             //fprintf(stderr,"%d died\n", fg_awaited_child_cmd_i);fflush(stderr);//DEBUG
         }
-        free(pipes_arr); free(fg_forks_pids_arr);
+        free(pipes_arr); 
+        if(!fg_execution_cancelled)
+            free(fg_forks_pids_arr);
     }
     else
     {
