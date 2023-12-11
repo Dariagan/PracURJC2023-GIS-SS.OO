@@ -33,7 +33,7 @@ typedef struct
     tline line;
     JobState state;
     pid_t* children_arr;
-    unsigned int currently_waited_child_i;
+    unsigned int currently_waited_child_cmd_i;
     pthread_t handler_thread_id;
 } Job;
 
@@ -83,18 +83,17 @@ void change_job_state(const unsigned int job_uid, const JobState new_state)
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 //cambiar el i del comando en el que estamos al procesar el trabajo desde el background
-void change_job_currently_waited_child_i(const unsigned int job_uid, const unsigned int new_current_i)
+void increment_waited_child_cmd_i(
+    const unsigned int job_uid)
 {
     int i;
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
     for(i = 0; i < bg_jobs_arr_size; i++)
-    {   
         if(bg_jobs[i].job_unique_id == job_uid)
         {
-            bg_jobs[i].currently_waited_child_i = new_current_i;
+            bg_jobs[i].currently_waited_child_cmd_i ++;
             break;
         }
-    }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 //Esto es para hacer una copia profunda de los strings embebidos en la línea src_line, a dest_line.
@@ -160,23 +159,20 @@ static unsigned int fg_waited_i = 0;
 
 static bool fg_execution_cancelled = false;
 
-typedef struct {
-    int** used_pipes_arr;
-    pid_t* children_pids_arr; 
-    tline line;
-} AddJobArgs;
-void* async_add_and_process_bg_job(void* uncasted_args)
+typedef struct {int** used_pipes_arr; pid_t* children_pids_arr; tline line;} AddJobArgs;
+void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
 {
-    AddJobArgs args = *((AddJobArgs*)uncasted_args);free(uncasted_args);
+    AddJobArgs args = *((AddJobArgs*)uncasted_args);
     unsigned int command_i;
     Job new_job;
+    free(uncasted_args);
     new_job.state = RUNNING;
     new_job.children_arr = args.children_pids_arr;
 
     new_job.line = args.line;
 
     new_job.handler_thread_id = pthread_self();
-    new_job.currently_waited_child_i = 0;
+    new_job.currently_waited_child_cmd_i = 0;
     
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
@@ -195,7 +191,7 @@ void* async_add_and_process_bg_job(void* uncasted_args)
         if( ! (pthread_self() == main_thread && fg_execution_cancelled))
         {
             waitpid(new_job.children_arr[command_i], NULL, 0);
-            change_job_currently_waited_child_i(new_job.job_unique_id, command_i);
+            increment_waited_child_cmd_i(new_job.job_unique_id);
         }
         else
         {
@@ -214,20 +210,32 @@ void* async_add_and_process_bg_job(void* uncasted_args)
     free(args.children_pids_arr);
     
 }
-
-void close_entire_pipe(const int pipe[2])
-{close(pipe[0]); close(pipe[1]);}
-
-void close_non_adjacent_pipes(int ** pipes, const int my_i, const int N_PIPES)
-{int j;for(j = my_i - 2; j >= 0; j--) close_entire_pipe(pipes[j]);
-for(j = my_i + 1; j < N_PIPES; j++) close_entire_pipe(pipes[j]);}
-
+//USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
+Job* find_bg_job(unsigned int uid){
+    unsigned int i;
+    for(i = 0; i < bg_jobs_arr_size; i++)
+        if (bg_jobs[i].job_unique_id == uid)
+            return bg_jobs + i; 
+    return NULL;
+}
+//USAR DENTRO DE MUTEX ⚠️. envía una señal a todos los procesos hijos de todos los trabajos en ejecución.
+void broadcast_signal(int signal)
+{
+    int jobs_i = 0, j = 0; Job* job;
+    for(jobs_i = 0; jobs_i < bg_jobs_arr_size; jobs_i++)
+    {   
+        job = bg_jobs + jobs_i;
+        for(j = 0; j < job->line.ncommands; j++)
+            kill(job->children_arr[j], signal);
+    }
+}
+//------------------------------------------------------------------
+//-------------------------COMANDOS NATIVOS-------------------------
 static const char CD[] = "cd";
 static const char JOBS[] = "jobs";
 static const char FG[] = "fg";
 static const char EXIT[] = "exit";
 static const char UMASK[] = "umask";
-
 static const char * const BUILTIN_COMMANDS[] = {CD, JOBS, FG, EXIT, UMASK};
 static const __u_char N_BUILTIN_COMMANDS = sizeof(BUILTIN_COMMANDS)/sizeof(char*);
 
@@ -240,7 +248,6 @@ bool is_builtin_command(tcommand* command_data)
             return true;
     return false;
 }
-
 int execute_cd(tcommand* command_data)
 {
     const char* target_directory = command_data->argv[1];
@@ -263,7 +270,6 @@ int execute_cd(tcommand* command_data)
     }
     return EXIT_SUCCESS;
 }
-//Ejecuta el comando "jobs"
 int execute_jobs(tcommand* command_data)
 {
     int job_i, cmd_i, arg_j, jobs_to_remove_count = 0; 
@@ -308,7 +314,8 @@ int execute_jobs(tcommand* command_data)
             }
             else
             {
-                completed_job_uids = realloc(completed_job_uids, jobs_to_remove_count*sizeof(unsigned int));
+                completed_job_uids = 
+                    realloc(completed_job_uids, jobs_to_remove_count*sizeof(unsigned int));
                 completed_job_uids[jobs_to_remove_count-1] = job->job_unique_id;
             }
         }
@@ -323,14 +330,6 @@ int execute_jobs(tcommand* command_data)
         free(completed_job_uids);
     
     return EXIT_SUCCESS;
-}//TODO: LLENAR TODO DE COMENTARIOS
-//USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
-Job* find_bg_job(unsigned int uid){
-    unsigned int i;
-    for(i = 0; i < bg_jobs_arr_size; i++)
-        if (bg_jobs[i].job_unique_id == uid)
-            return bg_jobs + i; 
-    return NULL;
 }
 int execute_fg(tcommand* command_data)
 {
@@ -348,7 +347,7 @@ int execute_fg(tcommand* command_data)
         {
             if(job->state != DONE)
             {
-                fg_waited_i = job->currently_waited_child_i;
+                fg_waited_i = job->currently_waited_child_cmd_i;
                 fg_forks_pids_arr = job->children_arr;
                 fg_n_commands = job->line.ncommands;
                 main_thread = job->handler_thread_id;
@@ -371,24 +370,12 @@ int execute_fg(tcommand* command_data)
         return EXIT_FAILURE;
     }
 }
-//USAR DENTRO DE MUTEX ⚠️. envía una señal a todos los procesos hijos de todos los trabajos en ejecución.
-void broadcast_signal(int signal)
-{
-    int jobs_i = 0, j = 0; Job* job;
-    for(jobs_i = 0; jobs_i < bg_jobs_arr_size; jobs_i++)
-    {   
-        job = bg_jobs + jobs_i;
-        for(j = 0; j < job->line.ncommands; j++)
-            kill(job->children_arr[j], signal);
-    }
-}
 int execute_exit(tcommand* command_data)
 {
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
     broadcast_signal(SIGTERM);
     sleep(1);
-    broadcast_signal(SIGKILL);
-    exit(0);
+    broadcast_signal(SIGKILL); exit(EXIT_SUCCESS);
 }
 int execute_umask(tcommand* command_data)
 {
@@ -401,10 +388,11 @@ int execute_umask(tcommand* command_data)
         fprintf(stderr, "Failure: Invalid octal mask format.\n");
         return EXIT_FAILURE;
     }
-    umask(new_mask);
-
-    return EXIT_SUCCESS;
+    umask(new_mask); return EXIT_SUCCESS;
 }
+//-------------------------COMANDOS NATIVOS-------------------------
+//------------------------------------------------------------------
+
 //Ejecutar un comando interno que esté implementado
 int execute_built_in_command(tcommand* command_data)
 {
@@ -464,7 +452,13 @@ void stop_foreground_execution(int signal)
         fg_execution_cancelled = true;
     }
 }
+void close_entire_pipe(const int pipe[2]) {close(pipe[0]); close(pipe[1]);}
 
+void close_non_adjacent_pipes(int ** pipes, const int cmd_i, const int N_PIPES)
+{   int j;
+    for(j = cmd_i - 2; j >= 0; j--) close_entire_pipe(pipes[j]);
+    for(j = cmd_i + 1; j < N_PIPES; j++) close_entire_pipe(pipes[j]);
+}
 int run_line(tline* line)
 {
     pid_t current_pid;
@@ -534,7 +528,7 @@ int run_line(tline* line)
                 if(i == 0)//primer comando
                 {
                     close(pipes_arr[i][READING_END]);
-                    dup2(pipes_arr[i][WRITING_END], STDOUT_FILENO);
+                    dup2 (pipes_arr[i][WRITING_END], STDOUT_FILENO);
                     close(pipes_arr[i][WRITING_END]);
                     
                     close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
@@ -542,11 +536,11 @@ int run_line(tline* line)
                 else if(i < fg_n_commands - 1)//comando intermedio
                 {
                     close(pipes_arr[i - 1][WRITING_END]);
-                    dup2(pipes_arr[i - 1][READING_END], STDIN_FILENO);
+                    dup2 (pipes_arr[i - 1][READING_END], STDIN_FILENO);
                     close(pipes_arr[i - 1][READING_END]);
 
                     close(pipes_arr[i][READING_END]);
-                    dup2(pipes_arr[i][WRITING_END], STDOUT_FILENO);
+                    dup2 (pipes_arr[i][WRITING_END], STDOUT_FILENO);
                     close(pipes_arr[i][WRITING_END]);
 
                     close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
@@ -554,7 +548,7 @@ int run_line(tline* line)
                 else//último comando
                 {
                     close(pipes_arr[i - 1][WRITING_END]);
-                    dup2(pipes_arr[i - 1][READING_END], STDIN_FILENO);
+                    dup2 (pipes_arr[i - 1][READING_END], STDIN_FILENO);
                     close(pipes_arr[i - 1][READING_END]);
 
                     close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
@@ -634,7 +628,7 @@ int run_line(tline* line)
         args->children_pids_arr = fg_forks_pids_arr;
         deep_copy_line(&args->line, line);
         args->used_pipes_arr = pipes_arr;
-        pthread_create(&placeholder, NULL, async_add_and_process_bg_job, (void*)args);
+        pthread_create(&placeholder, NULL, async_add_bg_job_and_cleanup_after_it, (void*)args);
     }
 
     return 0;
