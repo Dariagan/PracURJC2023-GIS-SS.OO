@@ -33,7 +33,7 @@ typedef struct
     tline line;
     JobState state;
     pid_t* children_arr;
-    unsigned int currently_waited_child_cmd_i;
+    unsigned int currently_awaited_child_cmd_i;
     pthread_t handler_thread_id;
 } Job;
 
@@ -83,7 +83,7 @@ void change_job_state(const unsigned int job_uid, const JobState new_state)
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 //cambiar el i del comando en el que estamos al procesar el trabajo desde el background
-void increment_waited_child_cmd_i(
+void increment_awaited_child_cmd_i(
     const unsigned int job_uid)
 {
     int i;
@@ -91,7 +91,7 @@ void increment_waited_child_cmd_i(
     for(i = 0; i < bg_jobs_arr_size; i++)
         if(bg_jobs[i].job_unique_id == job_uid)
         {
-            bg_jobs[i].currently_waited_child_cmd_i ++;
+            bg_jobs[i].currently_awaited_child_cmd_i ++;
             break;
         }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
@@ -155,7 +155,7 @@ static pthread_t main_thread;
 static pid_t* fg_forks_pids_arr;
 static unsigned int fg_n_commands = 0;
 static bool sent_to_background = false;
-static unsigned int fg_waited_i = 0;
+static unsigned int fg_awaited_child_cmd_i = 0;
 
 static bool fg_execution_cancelled = false;
 
@@ -172,14 +172,13 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
     new_job.line = args.line;
 
     new_job.handler_thread_id = pthread_self();
-    new_job.currently_waited_child_cmd_i = 0;
+    new_job.currently_awaited_child_cmd_i = 0;
     
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
     new_job.job_unique_id = next_job_uid_to_assign ++;
 
-    if(++ bg_jobs_arr_size == 1)
-        bg_jobs = malloc(sizeof(Job));
+    if(bg_jobs_arr_size ++ == 0) bg_jobs = malloc(sizeof(Job));
     else
         bg_jobs = realloc(bg_jobs, bg_jobs_arr_size*sizeof(Job));
 
@@ -191,7 +190,7 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
         if( ! (pthread_self() == main_thread && fg_execution_cancelled))
         {
             waitpid(new_job.children_arr[command_i], NULL, 0);
-            increment_waited_child_cmd_i(new_job.job_unique_id);
+            increment_awaited_child_cmd_i(new_job.job_unique_id);
         }
         else
         {
@@ -208,7 +207,6 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
     
     free(args.used_pipes_arr);
     free(args.children_pids_arr);
-    
 }
 //USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
 Job* find_bg_job(unsigned int uid){
@@ -309,13 +307,12 @@ int execute_jobs(tcommand* command_data)
         {
             if(jobs_to_remove_count ++ == 0)
             {
-                completed_job_uids = malloc(sizeof(unsigned int));
+                completed_job_uids = malloc(sizeof(*completed_job_uids));
                 completed_job_uids[0] = job->job_unique_id;
             }
             else
             {
-                completed_job_uids = 
-                    realloc(completed_job_uids, jobs_to_remove_count*sizeof(unsigned int));
+                completed_job_uids = realloc(completed_job_uids, jobs_to_remove_count*sizeof(*completed_job_uids));
                 completed_job_uids[jobs_to_remove_count-1] = job->job_unique_id;
             }
         }
@@ -347,7 +344,7 @@ int execute_fg(tcommand* command_data)
         {
             if(job->state != DONE)
             {
-                fg_waited_i = job->currently_waited_child_cmd_i;
+                fg_awaited_child_cmd_i = job->currently_awaited_child_cmd_i;
                 fg_forks_pids_arr = job->children_arr;
                 fg_n_commands = job->line.ncommands;
                 main_thread = job->handler_thread_id;
@@ -438,14 +435,14 @@ void stop_foreground_execution(int signal)
     pthread_t placeholder;
     if(pthread_self() == main_thread && signal == SIGINT && !sent_to_background && fg_n_commands)
     {
-        for(i = fg_waited_i; i < fg_n_commands; i++)
+        for(i = fg_awaited_child_cmd_i; i < fg_n_commands; i++)
         {
             kill(fg_forks_pids_arr[i], SIGTERM);
         }
         args = malloc(sizeof(AsyncKillArgs));
         args->n_commands = fg_n_commands;
         args->forks_pids_arr = fg_forks_pids_arr;
-        args->waited_i = fg_waited_i;
+        args->waited_i = fg_awaited_child_cmd_i;
         
         pthread_create(&placeholder, NULL, async_delayed_force_kill, (void*)args);
         
@@ -519,7 +516,7 @@ int run_line(tline* line)
 
         if(current_pid == 0)//hijo
         {
-            //ignora los ctrl + c
+            //ignorar los ctrl + c
             signal(SIGINT, SIG_IGN);
             //fprintf(stderr, "i am %d entering\n", i);fflush(stderr);//DEBUG
 
@@ -608,16 +605,16 @@ int run_line(tline* line)
     
     if( ! line->background)
     {
-        for(fg_waited_i = 0; fg_waited_i < fg_n_commands; fg_waited_i++)
+        for(fg_awaited_child_cmd_i = 0; fg_awaited_child_cmd_i < fg_n_commands; fg_awaited_child_cmd_i++)
         {
             if(!fg_execution_cancelled)
-                waitpid(fg_forks_pids_arr[fg_waited_i], NULL, 0);
+                waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], NULL, 0);
             else//TODO USAR EL STATUS DEVUELTO PA ALGO
-                waitpid(fg_forks_pids_arr[fg_waited_i], NULL, WNOHANG);//creo q hay q usar el return para algo
+                waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], NULL, WNOHANG);//creo q hay q usar el return para algo
                 
-            if (fg_waited_i < N_PIPES) free(pipes_arr[fg_waited_i]);
+            if (fg_awaited_child_cmd_i < N_PIPES) free(pipes_arr[fg_awaited_child_cmd_i]);
 
-            //fprintf(stderr,"%d died\n", fg_waited_i);fflush(stderr);//DEBUG
+            //fprintf(stderr,"%d died\n", fg_awaited_child_cmd_i);fflush(stderr);//DEBUG
         }
         free(pipes_arr);
         free(fg_forks_pids_arr);
