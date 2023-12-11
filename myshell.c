@@ -484,27 +484,27 @@ void stop_foreground_execution(int signal)
     }
 }
 
-int execute_line(tline* line)
+int run_line(tline* line)
 {
-    fg_n_commands = line->ncommands;
-    sent_to_background = line->background;
-    fg_forks_pids_arr = (pid_t*)malloc(fg_n_commands*sizeof(pid_t));
     int** pipes_arr;
     pid_t current_pid;
     FILE *file;
-    const unsigned int N_PIPES = fg_n_commands - 1;
+    const unsigned int N_PIPES = line->ncommands - 1;
     bool builtin_command_present = false;
     bool input_from_file = line->redirect_input != NULL;
     bool output_to_file = line->redirect_output != NULL;
     bool output_stderr_to_file = line->redirect_error != NULL;
     int i, j;
     pthread_t placeholder;
+    fg_n_commands = N_PIPES + 1;
+    sent_to_background = line->background;
+    fg_forks_pids_arr = (pid_t*)malloc(fg_n_commands*sizeof(pid_t));
 
     if(!fg_n_commands) return 0;
 
     for(i = 0; i < fg_n_commands && !builtin_command_present; i++)
     {
-        builtin_command_present = is_builtin_command(&(line->commands[i]));
+        builtin_command_present = is_builtin_command(line->commands + i);
     }
     if(builtin_command_present) 
     {
@@ -671,7 +671,7 @@ int do_await_input_loop()
     {
         main_thread = pthread_self();
         line = tokenize(buf);
-        execute_line(line);    
+        run_line(line);    
         fg_execution_cancelled = false;
         if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");exit(EXIT_FAILURE);}
         printf("msh %s> ", cwd);
