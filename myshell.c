@@ -19,13 +19,13 @@
 #define READING_END 0
 #define WRITING_END 1
 typedef enum{RUNNING, SUSPENDED, FAILED, DONE} JobState;
-const char* const stringify_job_state(JobState jobState)
-{switch(jobState){
+const char* const stringify_job_state(JobState job_state)
+{switch(job_state){
 case RUNNING: return "Running";
 case SUSPENDED: return "Suspended"; 
 case FAILED: return "Failed"; 
 case DONE: return "Done"; 
-default:fprintf(stderr, "INTERNAL ERROR (at stringify_job_state())\n");exit(EXIT_FAILURE);
+default:fprintf(stderr, "INTERNAL ERROR at stringify_job_state()\n");exit(EXIT_FAILURE);
 }}
 typedef struct 
 {
@@ -581,12 +581,12 @@ int run_line(tline* line)
                         exit(EXIT_FAILURE);
                     }
                 }
-            }//fprintf(stderr, "i am %d, executing\n msh>", i);fflush(stderr);//DEBUG
+            }
             
             if(i > 0)//esperar q el hermano anterior esté muerto (cuando la señal devuelve 1)
                 while(kill(fg_forks_pids_arr[i-1], 0) != -1)
                     usleep(10);
-            
+            //fprintf(stderr, "i am %d, executing\n msh>", i);fflush(stderr);//DEBUG
             execvp(line->commands[i].filename, line->commands[i].argv);
             perror("execvp");
             exit(EXIT_FAILURE);

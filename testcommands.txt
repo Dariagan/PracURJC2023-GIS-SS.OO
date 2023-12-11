@@ -1,0 +1,7 @@
+sleep 2 | echo "primerobg" | sleep 1 | echo "segundobg" &
+
+echo "salida" > ficherosalida.txt
+
+sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 &
+jobs
+
