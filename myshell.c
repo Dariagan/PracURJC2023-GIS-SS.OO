@@ -486,16 +486,16 @@ void stop_foreground_execution(int signal)
 
 int run_line(tline* line)
 {
-    int** pipes_arr;
     pid_t current_pid;
-    FILE *file;
     const unsigned int N_PIPES = line->ncommands - 1;
+    int** pipes_arr;
     bool builtin_command_present = false;
     bool input_from_file = line->redirect_input != NULL;
     bool output_to_file = line->redirect_output != NULL;
     bool output_stderr_to_file = line->redirect_error != NULL;
-    int i, j;
-    pthread_t placeholder;
+    FILE *file;
+    int i; pthread_t placeholder;
+    
     fg_n_commands = N_PIPES + 1;
     sent_to_background = line->background;
     fg_forks_pids_arr = (pid_t*)malloc(fg_n_commands*sizeof(pid_t));
