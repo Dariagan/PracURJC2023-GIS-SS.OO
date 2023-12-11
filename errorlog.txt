@@ -1,0 +1,2 @@
+rm: cannot remove 'noexistooo': No such file or directory
+rm: remove write-protected regular file '/usr/bin/env'? 

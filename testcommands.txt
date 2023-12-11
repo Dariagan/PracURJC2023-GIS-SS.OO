@@ -1,7 +1,15 @@
-sleep 2 | echo "primerobg" | sleep 1 | echo "segundobg" &
+sleep 2 | echo "terminzdobg" | tr z a &
 
-echo "salida" > ficherosalida.txt
+echo "escritura_a_fichero" > fichero_STDOUT_.txt
+
+head -n 5 < myshell.c
+
+cat < no_existo.hola
+
+rm noexistooo 2> SOY_UN_FICHERO_QUE_CONTIENE_STDERR
 
 sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 &
-jobs
+jobs 
+fg 1
+^ NO FUNCIONA EL ctrl + c
 

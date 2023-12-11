@@ -205,8 +205,8 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
     if( ! (pthread_self() == main_thread && fg_execution_cancelled))
         change_job_state(new_job.job_unique_id, DONE);
     
-    free(args.used_pipes_arr);
-    free(args.children_pids_arr);
+    free(args.used_pipes_arr); free(args.children_pids_arr);
+    return NULL;
 }
 //USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
 Job* find_bg_job(unsigned int uid){
@@ -348,6 +348,7 @@ int execute_fg(tcommand* command_data)
                 fg_forks_pids_arr = job->children_arr;
                 fg_n_commands = job->line.ncommands;
                 main_thread = job->handler_thread_id;
+                sent_to_background = false;
                 remove_completed_job(uid);
                 pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
                 pthread_join(main_thread, NULL);
@@ -421,11 +422,12 @@ int execute_built_in_command(tcommand* command_data)
 typedef struct{pid_t* forks_pids_arr; int waited_i; int n_commands;}AsyncKillArgs;
 void* async_delayed_force_kill(void * uncasted_args)
 {
-    int i;
+    int i; 
     AsyncKillArgs args = *((AsyncKillArgs*)uncasted_args);free(uncasted_args);
     sleep(10);
     for(i = args.waited_i; i < args.n_commands; i++)
         kill(args.forks_pids_arr[i], SIGKILL);
+    return NULL;
 }
 //manejador de la señal SIGINT (ctrl + c) para el proceso padre. (los procesos hijos la ignoran)
 void stop_foreground_execution(int signal)
@@ -433,8 +435,10 @@ void stop_foreground_execution(int signal)
     unsigned int i;
     AsyncKillArgs* args;
     pthread_t placeholder;
+    printf("holu soy %d\n", getpid());
     if(pthread_self() == main_thread && signal == SIGINT && !sent_to_background && fg_n_commands)
     {
+        printf("holu soy %d\n", getpid());
         for(i = fg_awaited_child_cmd_i; i < fg_n_commands; i++)
         {
             kill(fg_forks_pids_arr[i], SIGTERM);
@@ -575,6 +579,7 @@ int run_line(tline* line)
                 }
                 if(output_stderr_to_file)
                 {
+                    puts("redir");
                     file = freopen(line->redirect_error, "w", stderr);
                     if (file == NULL) {
                         fprintf(stderr, "Failed to create file for outputting stderr\n");
@@ -616,8 +621,7 @@ int run_line(tline* line)
 
             //fprintf(stderr,"%d died\n", fg_awaited_child_cmd_i);fflush(stderr);//DEBUG
         }
-        free(pipes_arr);
-        free(fg_forks_pids_arr);
+        free(pipes_arr); free(fg_forks_pids_arr);
     }
     else
     {
@@ -627,8 +631,7 @@ int run_line(tline* line)
         args->used_pipes_arr = pipes_arr;
         pthread_create(&placeholder, NULL, async_add_bg_job_and_cleanup_after_it, (void*)args);
     }
-
-    return 0;
+    return EXIT_SUCCESS;
 }
 // imprime msh> y pide input después de cada enter o comando de fg finalizado
 int do_await_input_loop()
@@ -655,4 +658,3 @@ int main(int argc, char const *argv[])
     signal(SIGINT, stop_foreground_execution);
     do_await_input_loop();
 }
-//TODO: LLENAR TODO DE COMENTARIOS
