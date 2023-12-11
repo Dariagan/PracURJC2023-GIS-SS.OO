@@ -268,6 +268,7 @@ int execute_cd(tcommand* command_data)
     }
     return EXIT_SUCCESS;
 }
+//comando jobs
 int execute_jobs(tcommand* command_data)
 {
     int job_i, cmd_i, arg_j, jobs_to_remove_count = 0; 
@@ -328,6 +329,7 @@ int execute_jobs(tcommand* command_data)
     
     return EXIT_SUCCESS;
 }
+// mandar al foreground
 int execute_fg(tcommand* command_data)
 {
     int uid; Job* job;
@@ -435,10 +437,10 @@ void stop_foreground_execution(int signal)
     unsigned int i;
     AsyncKillArgs* args;
     pthread_t placeholder;
-    printf("holu soy %d\n", getpid());
-    if(pthread_self() == main_thread && signal == SIGINT && !sent_to_background && fg_n_commands)
+
+    if(signal == SIGINT && !sent_to_background && fg_n_commands)
     {
-        printf("holu soy %d\n", getpid());
+        fg_execution_cancelled = true;
         for(i = fg_awaited_child_cmd_i; i < fg_n_commands; i++)
         {
             kill(fg_forks_pids_arr[i], SIGTERM);
@@ -449,8 +451,6 @@ void stop_foreground_execution(int signal)
         args->waited_i = fg_awaited_child_cmd_i;
         
         pthread_create(&placeholder, NULL, async_delayed_force_kill, (void*)args);
-        
-        fg_execution_cancelled = true;
     }
 }
 void close_entire_pipe(const int pipe[2]) {close(pipe[0]); close(pipe[1]);}
