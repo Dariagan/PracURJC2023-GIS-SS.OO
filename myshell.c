@@ -96,7 +96,7 @@ void increment_awaited_child_cmd_i(
         }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
-//Esto es para hacer una copia profunda de los strings embebidos en la línea src_line, a dest_line.
+//Esto es para hacer una copia profunda de los strings embebidos en la tline src_line, a dest_line.
 //Si no se hace esto, la siguiente llamada a tokenize() sobrescribiría los strings apuntados, la copia de solo punteros no sirve.
 void deep_copy_line(tline* dest_line, tline* src_line)
 {
@@ -202,10 +202,11 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
         
         //fprintf(stdout, "\nchild i=%d of job w/ uid %d died\n", command_i, new_job.job_unique_id);printf("msh> ");fflush(stdout);
     }
-    if( ! (pthread_self() == main_thread && fg_execution_cancelled))
+    if( ! (pthread_self() == main_thread && fg_execution_cancelled)){
         change_job_state(new_job.job_unique_id, DONE);
-    
-    free(args.used_pipes_arr); free(args.children_pids_arr);
+        free(args.children_pids_arr);
+    }
+    free(args.used_pipes_arr); 
     return NULL;
 }
 //USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
@@ -429,8 +430,9 @@ void* async_delayed_force_kill(void * uncasted_args)
     sleep(10);
     for(i = args.waited_i; i < args.n_commands; i++)
         kill(args.forks_pids_arr[i], SIGKILL);
+    free(args.forks_pids_arr);
     return NULL;
-}
+}//MATA A MAIN
 //manejador de la señal SIGINT (ctrl + c) para el proceso padre. (los procesos hijos la ignoran)
 void stop_foreground_execution(int signal)
 {
@@ -440,11 +442,11 @@ void stop_foreground_execution(int signal)
 
     if(signal == SIGINT && !sent_to_background && fg_n_commands)
     {
-        fg_execution_cancelled = true;
         for(i = fg_awaited_child_cmd_i; i < fg_n_commands; i++)
         {
             kill(fg_forks_pids_arr[i], SIGTERM);
         }
+        fg_execution_cancelled = true;
         args = malloc(sizeof(AsyncKillArgs));
         args->n_commands = fg_n_commands;
         args->forks_pids_arr = fg_forks_pids_arr;

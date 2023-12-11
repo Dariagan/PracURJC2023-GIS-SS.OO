@@ -11,5 +11,5 @@ mv noexistooo fff &> SOY_UN_FICHERO_QUE_CONTIENE_STDERR
 sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 &
 jobs 
 fg 1
-^ NO FUNCIONA EL ctrl + c
+ctrl c
 
