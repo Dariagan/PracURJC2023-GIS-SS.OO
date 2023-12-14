@@ -29,6 +29,7 @@ typedef struct
     unsigned int unique_id;
     tline line;
     JobState state;
+    int return_code;
     pid_t* children_arr;
     unsigned int currently_awaited_child_cmd_i;
     pthread_t handler_thread_id;
@@ -47,7 +48,7 @@ void remove_job_from_bgjobs_arr(const unsigned int job_to_remove_uid)
 {
     int prev_arr_i; int added_jobs_count = 0; 
     Job* previous_bg_jobs;
-    if(bg_jobs_arr_size == 0) {fprintf(stderr, "INTERNAL ERROR: job list is already empty at this execution point\n"); exit(EXIT_FAILURE);}
+    if(bg_jobs_arr_size == 0) {fprintf(stderr, "INTERNAL ERROR: job list is empty at this execution point\n"); exit(EXIT_FAILURE);}
 
     previous_bg_jobs = bg_jobs;
     if(-- bg_jobs_arr_size > 0)
@@ -65,15 +66,16 @@ void remove_job_from_bgjobs_arr(const unsigned int job_to_remove_uid)
     free(previous_bg_jobs);
 }
 
-void update_job_state(const unsigned int job_uid, const JobState new_state)
+void update_job_state(const unsigned int job_uid, const JobState new_state, const int code)
 {
-    int i;
+    int i; 
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
     for(i = 0; i < bg_jobs_arr_size; i++)
     {   
         if(bg_jobs[i].unique_id == job_uid)
         {
             bg_jobs[i].state = new_state;
+            bg_jobs[i].return_code = code;
             break;
         }
     }
@@ -158,66 +160,66 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
 {
     AddJobArgs args = *((AddJobArgs*)uncasted_args);
     unsigned int cmd_i; int ch_status;
-    int exec_exit_status = 0;
-    Job new_job;
+    Job this_job;
 
     free(uncasted_args);
-    new_job.state = RUNNING;
-    new_job.children_arr = args.children_pids_arr;
+    this_job.state = RUNNING;
+    this_job.children_arr = args.children_pids_arr;
 
-    new_job.line = args.line;
+    this_job.line = args.line;
+    this_job.return_code = 0;
 
-    new_job.handler_thread_id = pthread_self();
-    new_job.currently_awaited_child_cmd_i = 0;
+    this_job.handler_thread_id = pthread_self();
+    this_job.currently_awaited_child_cmd_i = 0;
     
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
 
-    new_job.unique_id = next_job_uid_to_assign ++;
+    this_job.unique_id = next_job_uid_to_assign ++;
 
     if(bg_jobs_arr_size ++ == 0) bg_jobs = malloc(sizeof(Job));
     else
         bg_jobs = realloc(bg_jobs, bg_jobs_arr_size*sizeof(Job));
 
-    bg_jobs[bg_jobs_arr_size - 1] = new_job;
+    bg_jobs[bg_jobs_arr_size - 1] = this_job;
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 
-    for(cmd_i = 0; cmd_i < new_job.line.ncommands; cmd_i++)
+    for(cmd_i = 0; cmd_i < this_job.line.ncommands; cmd_i++)
     {
-        if(!(pthread_self()==foreground_thread&&fg_execution_cancelled) && new_job.state!=FAILED)
+        if(!(pthread_self()==foreground_thread&&fg_execution_cancelled) && this_job.state!=FAILED)
         {
-            waitpid(new_job.children_arr[cmd_i], &ch_status, 0);
-            increment_awaited_child_cmd_i(new_job.unique_id);
+            waitpid(this_job.children_arr[cmd_i], &ch_status, 0);
+            increment_awaited_child_cmd_i(this_job.unique_id);
 
-            if(!WIFEXITED(ch_status))
+            if(WIFEXITED(ch_status) && WEXITSTATUS(ch_status))
             {
-                if(pthread_self()!=foreground_thread) update_job_state(new_job.unique_id, FAILED);
-                new_job.state = FAILED;
-                exec_exit_status = WEXITSTATUS(ch_status);
+                this_job.return_code = WEXITSTATUS(ch_status);
+                this_job.state = FAILED;
+                if(pthread_self()!=foreground_thread) update_job_state(this_job.unique_id, this_job.state, this_job.return_code);
             }
         }else{
-            kill(new_job.children_arr[cmd_i], SIGTERM);
+            kill(this_job.children_arr[cmd_i], SIGTERM);
             usleep(50);
-            if(!waitpid(new_job.children_arr[cmd_i], NULL, WNOHANG))
+            if(!waitpid(this_job.children_arr[cmd_i], NULL, WNOHANG))
             {
                 if(pthread_self() != foreground_thread) sleep(1); 
 
-                kill(new_job.children_arr[cmd_i], SIGKILL);
+                kill(this_job.children_arr[cmd_i], SIGKILL);
             }
         }
-        if (cmd_i < new_job.line.ncommands - 1) 
+        if (cmd_i < this_job.line.ncommands - 1) 
             free((args.used_pipes_arr)[cmd_i]);
         
-        //fprintf(stdout, "\nchild i=%d of job w/ uid %d died\n", cmd_i, new_job.unique_id);printf("msh> ");fflush(stdout);
+        //fprintf(stdout, "\nchild i=%d of job w/ uid %d died\n", cmd_i, this_job.unique_id);printf("msh> ");fflush(stdout);
     }
-    if(pthread_self() != foreground_thread && new_job.state != FAILED)
+    if(pthread_self() != foreground_thread && this_job.state != FAILED)
     {    
-        update_job_state(new_job.unique_id, DONE);
+        update_job_state(this_job.unique_id, DONE, 0);
     }
     if( ! (pthread_self()==foreground_thread&&fg_execution_cancelled))
         free(args.children_pids_arr);
 
     free(args.used_pipes_arr); 
-    return exec_exit_status;
+    pthread_exit((void*)(long)this_job.return_code);
 }
 //USAR DENTRO DE MUTEX ⚠️. Devuelve un puntero que apunta al trabajo que tenga el identificador único pasado, o NULL si no lo encuentra.
 Job* find_bg_job(unsigned int uid){
@@ -296,9 +298,12 @@ int execute_jobs(tcommand* command_data)
         if(job->line.redirect_error)
             printf(" >& %s ", job->line.redirect_error);
 
-        printf("STATUS: %s\n", stringify_job_state(job->state));
+        printf("STATUS: %s", stringify_job_state(job->state));
+
         if(job->state == DONE || job->state == FAILED)
         {
+            printf("(%d)", job->return_code);
+
             if(jobs_to_remove_count ++ == 0)
             {
                 completed_job_uids = malloc(sizeof(*completed_job_uids));
@@ -309,6 +314,7 @@ int execute_jobs(tcommand* command_data)
                 completed_job_uids[jobs_to_remove_count-1] = job->unique_id;
             }
         }
+        putchar('\n');
     }
     for(job_i = 0; job_i < jobs_to_remove_count; job_i++)
     {
@@ -323,7 +329,7 @@ int execute_jobs(tcommand* command_data)
 }
 int execute_fg(tcommand* command_data)
 {
-    long uid; Job* job;
+    long uid; Job* job; int thread_return;
     if (command_data->argc != 2) {
         fprintf(stderr, "Usage: %s <job UID>\n", FG);
         return EXIT_FAILURE;
@@ -343,12 +349,12 @@ int execute_fg(tcommand* command_data)
                 sent_to_background = false;
                 remove_job_from_bgjobs_arr(uid);
                 pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
-                pthread_join(foreground_thread, NULL);
+                pthread_join(foreground_thread, (void**)&thread_return);
                 foreground_thread = pthread_self();
-                return EXIT_SUCCESS;
+                return thread_return;
             }
-            else fprintf(stderr, "Job with UID=%d has already finished its execution\n", uid);
-        else fprintf(stderr, "Job with UID=%d not found\n", uid);
+            else fprintf(stderr, "Job with UID=%ld has already finished its execution\n", uid);
+        else fprintf(stderr, "Job with UID=%ld not found\n", uid);
         
         pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
         return EXIT_FAILURE;
@@ -608,7 +614,7 @@ int run_line(tline* line)
             {
                 waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], &ch_status, WNOHANG);
             }
-            if(exec_exit_status == 0 && !WIFEXITED(ch_status))
+            if(exec_exit_status == 0 && WIFEXITED(ch_status))
             {
                 exec_exit_status = WEXITSTATUS(ch_status);
             }
