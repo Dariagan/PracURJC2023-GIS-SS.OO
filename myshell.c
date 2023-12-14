@@ -19,10 +19,10 @@
 #define READING_END 0
 #define WRITING_END 1
 typedef enum{RUNNING, SUSPENDED, DONE, FAILED} JobState;
-const char* const stringify_job_state(const JobState job_state)
+const char* const job_state_to_string(const JobState job_state)
 {switch(job_state){
 case RUNNING: return "Running";case SUSPENDED: return "Suspended"; case DONE: return "Done"; case FAILED: return "Failed"; 
-default:fprintf(stderr, "INTERNAL ERROR at stringify_job_state()\n");exit(EXIT_FAILURE);
+default:fprintf(stderr, "INTERNAL ERROR at job_state_to_string()\n");exit(EXIT_FAILURE);
 }}
 typedef struct 
 {
@@ -298,7 +298,7 @@ int execute_jobs(tcommand* command_data)
         if(job->line.redirect_error)
             printf(" >& %s ", job->line.redirect_error);
 
-        printf("STATUS: %s", stringify_job_state(job->state));
+        printf("STATUS: %s", job_state_to_string(job->state));
 
         if(job->state == DONE || job->state == FAILED)
         {
@@ -367,12 +367,13 @@ int execute_fg(tcommand* command_data)
 }
 int execute_exit(tcommand* command_data)
 {
+    const char ALL = 0;
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
     signal(SIGTERM, SIG_IGN);
-    kill(0, SIGTERM);
+    kill(ALL, SIGTERM);
     sleep(1);
-
-    exit(kill(0, SIGKILL));
+    kill(ALL, SIGKILL);
+    exit(1);
 }
 int execute_umask(tcommand* command_data)
 {
@@ -387,7 +388,7 @@ int execute_umask(tcommand* command_data)
     }
     umask(new_mask); return EXIT_SUCCESS;
 }
-//-------------------------COMANDOS NATIVOS-------------------------
+//------------------------/COMANDOS NATIVOS-------------------------
 //------------------------------------------------------------------
 
 //Ejecutar un comando interno que esté implementado
