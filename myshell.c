@@ -46,39 +46,36 @@ void deep_free_line_embedded_strings(Job* job);
 //SOLO LLAMAR DESDE DENTRO DEL MUTEX⚠️
 void remove_job_from_bgjobs_arr(const unsigned int job_to_remove_uid)
 {
-    int prev_arr_i; int added_jobs_count = 0; 
-    Job* previous_bg_jobs;
+    Job* prev_bg_jobs;
+    unsigned int prev_arr_i, added_jobs_count = 0; 
     if(bg_jobs_arr_size == 0) {fprintf(stderr, "INTERNAL ERROR: job list is empty at this execution point\n"); exit(EXIT_FAILURE);}
 
-    previous_bg_jobs = bg_jobs;
+    prev_bg_jobs = bg_jobs;
     if(-- bg_jobs_arr_size > 0)
     {
         bg_jobs = malloc((bg_jobs_arr_size)*sizeof(Job));
         for(prev_arr_i = 0; prev_arr_i < bg_jobs_arr_size + 1; prev_arr_i++)
         {   
-            if(previous_bg_jobs[prev_arr_i].unique_id != job_to_remove_uid)
+            if(prev_bg_jobs[prev_arr_i].unique_id != job_to_remove_uid)
             {
-                bg_jobs[added_jobs_count++] = previous_bg_jobs[prev_arr_i];
+                bg_jobs[added_jobs_count++] = prev_bg_jobs[prev_arr_i];
             }
-            else deep_free_line_embedded_strings(previous_bg_jobs + prev_arr_i);
+            else deep_free_line_embedded_strings(prev_bg_jobs + prev_arr_i);
         }
-    }
-    free(previous_bg_jobs);
+    }free(prev_bg_jobs);
 }
 
 void update_job_state(const unsigned int job_uid, const JobState new_state, const int code)
 {
     int i; 
     pthread_mutex_lock(&reading_or_modifying_bg_jobs_mtx);
-    for(i = 0; i < bg_jobs_arr_size; i++)
-    {   
+    for(i = 0; i < bg_jobs_arr_size; i++) 
         if(bg_jobs[i].unique_id == job_uid)
         {
             bg_jobs[i].state = new_state;
             bg_jobs[i].return_code = code;
             break;
         }
-    }
     pthread_mutex_unlock(&reading_or_modifying_bg_jobs_mtx);
 }
 //cambiar el i del comando en el que estamos al procesar el trabajo desde el background
