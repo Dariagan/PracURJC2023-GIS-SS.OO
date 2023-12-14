@@ -421,9 +421,8 @@ int execute_built_in_command(tcommand* command_data)
 typedef struct{pid_t* forks_pids_arr; int awaited_i; int n_commands;}AsyncKillArgs;
 void* async_delayed_force_kill(void * uncasted_args)
 {
-    int i; 
-    AsyncKillArgs args = *((AsyncKillArgs*)uncasted_args);free(uncasted_args);
-    sleep(10);
+    int i; AsyncKillArgs args = *((AsyncKillArgs*)uncasted_args);
+    free(uncasted_args); sleep(10);
     for(i = args.awaited_i; i < args.n_commands; i++)
         kill(args.forks_pids_arr[i], SIGKILL);
     free(args.forks_pids_arr); return NULL;
