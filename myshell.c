@@ -209,7 +209,6 @@ void* async_add_bg_job_and_cleanup_after_it(void* uncasted_args)
         if (cmd_i < this_job.line.ncommands - 1) 
             free((args.used_pipes_arr)[cmd_i]);
         
-        //fprintf(stdout, "\nchild i=%d of job w/ uid %d died\n", cmd_i, this_job.unique_id);printf("msh> ");fflush(stdout);
     }
     if(pthread_self() != foreground_thread && this_job.state != FAILED)
     {    
@@ -282,7 +281,7 @@ int execute_jobs(tcommand* command_data)
     for(job_i = 0; job_i < bg_jobs_arr_size; job_i++)
     {
         job = bg_jobs + job_i;
-        printf("[%dº][UID:%u] job: ", job_i, job->unique_id);
+        printf("[%dº][UID:%u] job: ", job_i+1, job->unique_id);
         for(cmd_i = 0; cmd_i < job->line.ncommands; cmd_i++)
         {
             command = job->line.commands + cmd_i;
@@ -437,7 +436,7 @@ void stop_foreground_execution(int signal)
     if(signal == SIGINT && !sent_to_background && fg_n_commands)
     {
         for(i = fg_awaited_child_cmd_i; i < fg_n_commands; i++)
-        {// se pide amablemente que terminen su ejecución
+        {// se señala que terminen su ejecución ordenadamente
             kill(fg_forks_pids_arr[i], SIGTERM);
         }
         fg_execution_cancelled = true;
@@ -613,9 +612,9 @@ int run_line(tline* line)
                 waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], &ch_status, 0);
             else
             {
-                waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], &ch_status, WNOHANG);
+                waitpid(fg_forks_pids_arr[fg_awaited_child_cmd_i], NULL, WNOHANG);
             }
-            if(exec_exit_status == 0 && WIFEXITED(ch_status))
+            if(!fg_execution_cancelled && exec_exit_status == 0 && WIFEXITED(ch_status))
             {
                 exec_exit_status = WEXITSTATUS(ch_status);
             }
