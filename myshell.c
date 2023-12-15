@@ -458,7 +458,7 @@ int run_line(tline* line)
     bool builtin_command_present = false;
     bool input_from_file = line->redirect_input != NULL;
     bool output_to_file = line->redirect_output != NULL;
-    bool output_stderr_to_file = line->redirect_error != NULL;
+    bool output_stdout_and_err_to_file = line->redirect_error != NULL;
     int exec_exit_status = 0;
     //variables temp:
     pid_t current_pid; FILE *file; int i; pthread_t placeholder; int ch_status;
@@ -564,7 +564,7 @@ int run_line(tline* line)
                         exit(EXIT_FAILURE);
                     }
                 }
-                if(output_stderr_to_file)
+                if(output_stdout_and_err_to_file)
                 {
                     file = freopen(line->redirect_error, "w", stderr);
                     if (file == NULL) {

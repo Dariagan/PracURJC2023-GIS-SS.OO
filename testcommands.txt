@@ -8,7 +8,7 @@ head -n 5 < myshell.c
 
 cat < no_existo.hola
 
-mv noexistooo fff &> SOY_UN_FICHERO_QUE_CONTIENE_STDERR
+mv noexistooo fff >& SOY_UN_FICHERO_QUE_CONTIENE_STDERR
 
 sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 | sleep 2 | sleep 3 &
 jobs 
