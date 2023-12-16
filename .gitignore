@@ -1,5 +1,4 @@
 meta
-libparser.a
 libparser32.a
 myshell
 p5.c
