@@ -640,7 +640,6 @@ int main()
     printf("msh %s> ", cwd);	
     while (fgets(buf, sizeof(buf), stdin)) 
     {
-        
         run_line(tokenize(buf));    
         fg_execution_cancelled = false;
         fg_n_commands = 0;
