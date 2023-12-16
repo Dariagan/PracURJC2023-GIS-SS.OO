@@ -630,7 +630,7 @@ int run_line(tline* line)
     }
 }
 // imprime msh> y pide input después de cada enter o comando de fg finalizado
-int main(int argc, char const *argv[])
+int main()
 {
     char buf[BUFFER_SIZE]; char cwd[BUFFER_SIZE];
     pthread_mutex_init(&reading_or_modifying_bg_jobs_mtx, NULL);
