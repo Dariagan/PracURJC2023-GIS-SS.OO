@@ -635,12 +635,12 @@ int main()
     char buf[BUFFER_SIZE]; char cwd[BUFFER_SIZE];
     pthread_mutex_init(&reading_or_modifying_bg_jobs_mtx, NULL);
     signal(SIGINT, stop_foreground_execution);
-    
+    foreground_thread = pthread_self();
     if (getcwd(cwd, sizeof(cwd)) == NULL) {perror("getcwd");exit(EXIT_FAILURE);} 
     printf("msh %s> ", cwd);	
     while (fgets(buf, sizeof(buf), stdin)) 
     {
-        foreground_thread = pthread_self();
+        
         run_line(tokenize(buf));    
         fg_execution_cancelled = false;
         fg_n_commands = 0;
