@@ -354,7 +354,7 @@ int execute_exit(){
     kill(ALL, SIGTERM);
     sleep(1);
     kill(ALL, SIGKILL);
-    exit(1);
+    exit(0);
 }
 int execute_umask(tcommand* command_data)
 {
@@ -513,13 +513,12 @@ int run_line(tline* line)
 
             if(N_PIPES >= 1)
             {
+                close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
                 if(i == 0)//primer comando
                 {
                     close(pipes_arr[i][READING_END]);
                     dup2 (pipes_arr[i][WRITING_END], STDOUT_FILENO);
                     close(pipes_arr[i][WRITING_END]);
-                    
-                    close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
                 }
                 else if(i < fg_n_commands - 1)//comando intermedio
                 {
@@ -530,16 +529,12 @@ int run_line(tline* line)
                     close(pipes_arr[i][READING_END]);
                     dup2 (pipes_arr[i][WRITING_END], STDOUT_FILENO);
                     close(pipes_arr[i][WRITING_END]);
-
-                    close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
                 }
                 else//último comando
                 {
                     close(pipes_arr[i - 1][WRITING_END]);
                     dup2 (pipes_arr[i - 1][READING_END], STDIN_FILENO);
                     close(pipes_arr[i - 1][READING_END]);
-
-                    close_non_adjacent_pipes(pipes_arr, i, N_PIPES);
                 }
             }
             if (access(line->commands[i].filename, F_OK) != 0) {
